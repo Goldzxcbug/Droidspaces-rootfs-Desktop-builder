@@ -78,9 +78,9 @@ RUN apt-get update && \
         # 基础 X11/Wayland 支持
         dbus-x11 x11-xserver-utils fonts-noto-cjk fonts-noto-color-emoji wayland-utils xserver-xorg dbus-user-session \
         # Plasma Mobile 核心组件
-        plasma-nano plasma-mobile plasma-phone-components \
+        plasma-nano plasma-mobile plasma-mobile-phone \
         # 虚拟键盘（触屏必需）
-        maliit-keyboard maliit-framework \
+        maliit-keyboard maliit-framework maliit-server-qt6 \
         # Wayland 合成器（Mobile 必须走 Wayland）
         kwin-wayland \
         # 音频与电源管理
@@ -98,9 +98,9 @@ RUN apt-get update && \
         gstreamer1.0-plugins-base gstreamer1.0-plugins-good sound-theme-freedesktop libcanberra-pulse \
         # 认证与安全
         polkit-kde-agent-1 libpam-systemd libpam-modules libpam-kwallet5 \
-        # QML 模块（Plasma Mobile UI 依赖）
-        qml-module-org-kde-kirigami qml-module-qtquick-controls2 qml-module-qtquick-layouts \
-        qml-module-qtquick-templates2 qml-module-qtgraphicaleffects \
+        # QML 模块（Plasma Mobile UI 依赖，Qt6 命名）
+        qml6-module-org-kde-kirigami qml6-module-qtquick-controls \
+        qml6-module-qtquick-layouts qml6-module-qtquick-templates \
         # 中文支持
         language-pack-kde-zh-hans language-pack-zh-hans qt6-translations-l10n; \
     fi && \

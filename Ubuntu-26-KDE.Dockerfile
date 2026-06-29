@@ -51,9 +51,9 @@ RUN apt-get update && \
     # 核心内核模块支持
     kmod tzdata && \
     ############################################## KDE支持 ################################################
-    # 最小化KDE
     # 解除底层系统对中文等翻译文件(.mo)的剔除规则，防止安装桌面时丢包
     sed -i 's|^path-exclude=/usr/share/locale/\*/LC_MESSAGES/\*.mo|#&|' /etc/dpkg/dpkg.cfg.d/excludes || true && \
+    # 最小化KDE
     if [ "$BUILD_KDE" = "min" ]; then \
         apt-get install -y --no-install-recommends \
         dbus-x11 x11-xserver-utils fonts-noto-cjk fonts-noto-color-emoji kde-plasma-desktop kubuntu-settings-desktop kubuntu-wallpapers \
@@ -71,8 +71,41 @@ RUN apt-get update && \
         kimageformat6-plugins plasma-browser-integration libcanberra-pulse gstreamer1.0-plugins-base gstreamer1.0-plugins-good sound-theme-freedesktop \
         polkit-kde-agent-1 libpam-systemd libpam-modules libpam-kwallet5 plasma-session-x11 language-pack-kde-zh-hans language-pack-zh-hans qt6-translations-l10n; \
     fi && \
+    ############################################## KDE Mobile 支持（移动端适配） ################################################
+    # 使用 Plasma Mobile Shell 替代标准 KDE 桌面，专为触屏手机/平板优化
+    if [ "$BUILD_KDE" = "mobile" ]; then \
+        apt-get install -y --no-install-recommends \
+        # 基础 X11/Wayland 支持
+        dbus-x11 x11-xserver-utils fonts-noto-cjk fonts-noto-color-emoji wayland-utils xserver-xorg dbus-user-session \
+        # Plasma Mobile 核心组件
+        plasma-nano plasma-mobile plasma-phone-components \
+        # 虚拟键盘（触屏必需）
+        maliit-keyboard maliit-framework \
+        # Wayland 合成器（Mobile 必须走 Wayland）
+        kwin-wayland \
+        # 音频与电源管理
+        pipewire pipewire-pulse wireplumber powerdevil plasma-pa upower pulseaudio-utils \
+        # 常用应用
+        konsole dolphin kate kinfocenter \
+        # Mesa 与 Vulkan
+        mesa-utils vulkan-tools \
+        # 系统管理工具
+        systemsettings plasma-systemmonitor kde-config-screenlocker kio-extras xdg-user-dirs \
+        dolphin-plugins ffmpegthumbs kdegraphics-thumbnailers kimageformat6-plugins \
+        # 移动端应用
+        plasma-settings angelfish \
+        # 多媒体支持
+        gstreamer1.0-plugins-base gstreamer1.0-plugins-good sound-theme-freedesktop libcanberra-pulse \
+        # 认证与安全
+        polkit-kde-agent-1 libpam-systemd libpam-modules libpam-kwallet5 \
+        # QML 模块（Plasma Mobile UI 依赖）
+        qml-module-org-kde-kirigami qml-module-qtquick-controls2 qml-module-qtquick-layouts \
+        qml-module-qtquick-templates2 qml-module-qtgraphicaleffects \
+        # 中文支持
+        language-pack-kde-zh-hans language-pack-zh-hans qt6-translations-l10n; \
+    fi && \
     ############################################## anland_kde(wayland) 支持 ################################################
-    if [ "$ENABLE_anland_kde_ARG" = "true" ] && ([ "$BUILD_KDE" = "min" ] || [ "$BUILD_KDE" = "conc" ]); then \
+    if [ "$ENABLE_anland_kde_ARG" = "true" ] && ([ "$BUILD_KDE" = "min" ] || [ "$BUILD_KDE" = "conc" ] || [ "$BUILD_KDE" = "mobile" ]); then \
         echo "--> [开启] 正在安装 anland_kde..." && \
         echo "--> [开启] 正在安装预编译的 kwin deb 包..." && \
         dpkg -i /tmp/anland-build/ubuntu2604/kwin/*.deb || apt-get install -f -y && \
@@ -154,8 +187,24 @@ RUN sed -i '/en_US.UTF-8/s/^# //' /etc/locale.gen && \
 RUN cat <<'EOF' > /etc/environment
 XCURSOR_SIZE=48
 EOF
+
 # wayland 显示服务器环境变量配置
-RUN if [ "$ENABLE_anland_kde_ARG" != "true" ]; then \
+# Mobile 模式强制走 Wayland + anland
+RUN if [ "$BUILD_KDE" = "mobile" ]; then \
+        echo "WAYLAND_DISPLAY=wayland-0" >> /etc/environment; \
+        echo "DISPLAY=:0" >> /etc/environment; \
+        echo "QT_QPA_PLATFORM=wayland" >> /etc/environment; \
+        echo "QT_QPA_PLATFORMTHEME=KDE" >> /etc/environment; \
+        echo "QT_ENABLE_HIGHDPI_SCALING=1" >> /etc/environment; \
+        echo "PLASMA_PLATFORM=phone" >> /etc/environment; \
+        echo "XCURSOR_SIZE=32" >> /etc/environment; \
+        echo "ANLAND=1" >> /etc/environment; \
+        echo "ANLAND_SOCKET=/run/display.sock" >> /etc/environment; \
+        echo "ANLAND_DRM_DEVICE=/dev/dri/renderD128" >> /etc/environment; \
+        echo "MESA_LOADER_DRIVER_OVERRIDE=kgsl" >> /etc/environment; \
+        echo "GALLIUM_DRIVER=kgsl" >> /etc/environment; \
+        echo "FD_FORCE_KGSL=1" >> /etc/environment; \
+    elif [ "$ENABLE_anland_kde_ARG" != "true" ]; then \
         echo "DISPLAY=:5" >> /etc/environment; \
     else \
         echo "WAYLAND_DISPLAY=wayland-0" >> /etc/environment; \
@@ -175,12 +224,6 @@ RUN if [ "$PulseAudio" = "socket" ]; then \
     elif [ "$PulseAudio" = "tcp" ]; then \
         echo "PULSE_SERVER=tcp:127.0.0.1:4713" >> /etc/environment; \
     fi
-# 修复anland 音频堵塞
-# RUN if [ "$ENABLE_anland_kde_ARG" = "true" ]; then \
-#        mkdir -p /home/${USERNAME}/.config && \
-#       echo -e "\n[Sounds]\nEnable=false" >> /home/${USERNAME}/.config/kdeglobals ; \
-#     fi
-
 
 # 输入法开机自启动及 KDE 配置
 RUN <<'EOF_RUN'
@@ -207,7 +250,7 @@ SDL_IM_MODULE=fcitx5
 GLFW_IM_MODULE=fcitx
 EOF
 fi
-    if [ "$ENABLE_mesa_ARG" = "true" ] && [ "$ENABLE_anland_kde_ARG" != "true" ] ; then
+    if [ "$ENABLE_mesa_ARG" = "true" ] && [ "$ENABLE_anland_kde_ARG" != "true" ] && [ "$BUILD_KDE" != "mobile" ]; then
         cat <<'EOF' >> /etc/environment
 MESA_LOADER_DRIVER_OVERRIDE=kgsl
 TU_DEBUG=noconform
@@ -215,16 +258,58 @@ EOF
     fi
 
     echo 'export XDG_RUNTIME_DIR=/run/user/$(id -u)' >> /home/${USERNAME}/.bashrc
-    if [ "$BUILD_KDE" = "min" ] || [ "$BUILD_KDE" = "conc" ] ; then
+
     mkdir -p /home/${USERNAME}/.config
+
+    # 标准 KDE 桌面（min/conc）配置：禁用合成器以提升性能
+    if [ "$BUILD_KDE" = "min" ] || [ "$BUILD_KDE" = "conc" ]; then
     cat <<'EOF' > /home/${USERNAME}/.config/kwinrc
 [Compositing]
 Enabled=false
 EOF
     fi
+
+    # KDE Mobile 配置：启用合成器，适配触屏
+    if [ "$BUILD_KDE" = "mobile" ]; then
+    cat <<'EOF' > /home/${USERNAME}/.config/kwinrc
+[Compositing]
+Enabled=true
+Backend=Wayland
+AnimationSpeed=3
+
+[Windows]
+BorderlessMaximizedWindows=true
+Placement=Smart
+
+[Plugins]
+kwin4_effect_scaleEnabled=false
+kwin4_effect_fadeEnabled=false
+kwin4_effect_blurEnabled=false
+kwin4_effect_squashEnabled=false
+EOF
+    # Plasma Mobile Shell 配置
+    cat <<'EOF' > /home/${USERNAME}/.config/plasmarc
+[Theme]
+name=breeze-mobile
+EOF
+    # 禁用锁屏（容器环境下不需要）
+    cat <<'EOF' > /home/${USERNAME}/.config/kscreenlockerrc
+[Daemon]
+Autolock=false
+LockOnResume=false
+EOF
+    # 触控板/鼠标配置
+    cat <<'EOF' > /home/${USERNAME}/.config/touchpadrc
+[Touchpad]
+NaturalScroll=true
+TapToClick=true
+EOF
+    fi
+
     chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}
-    # KDE X11 自启动
-    if [ "$BUILD_KDE_plus" = "true" ] && [ "$ENABLE_anland_kde_ARG" = "false" ] ; then
+
+    # KDE X11 自启动（仅标准桌面 min/conc 使用）
+    if [ "$BUILD_KDE_plus" = "true" ] && [ "$ENABLE_anland_kde_ARG" = "false" ] && [ "$BUILD_KDE" != "mobile" ]; then
     cat <<EOF > /etc/systemd/system/plasma-x11.service
 [Unit]
 Description=Start Plasma X11
@@ -243,8 +328,9 @@ EOF
     mkdir -p /etc/systemd/system/multi-user.target.wants
     ln -sf /etc/systemd/system/plasma-x11.service /etc/systemd/system/multi-user.target.wants/plasma-x11.service
     fi
-    # KDE wayland 自启动
-    if [ "$BUILD_KDE_plus" = "true" ] && [ "$ENABLE_anland_kde_ARG" = "true" ] ; then
+
+    # KDE 标准桌面 Wayland 自启动（min/conc + anland）
+    if [ "$BUILD_KDE_plus" = "true" ] && [ "$ENABLE_anland_kde_ARG" = "true" ] && [ "$BUILD_KDE" != "mobile" ]; then
     cat <<EOF > /etc/systemd/system/plasma-wayland.service
 [Unit]
 Description=Start Plasma Wayland
@@ -258,6 +344,30 @@ PAMName=login
 
 EnvironmentFile=-/etc/environment
 ExecStart=/bin/bash -lc 'startplasma-wayland'
+Restart=no
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    mkdir -p /etc/systemd/system/multi-user.target.wants
+    ln -sf /etc/systemd/system/plasma-wayland.service /etc/systemd/system/multi-user.target.wants/plasma-wayland.service
+    fi
+
+    # KDE Mobile Wayland 自启动（mobile 模式，使用 startplasma-mobile）
+    if [ "$BUILD_KDE_plus" = "true" ] && [ "$BUILD_KDE" = "mobile" ]; then
+    cat <<EOF > /etc/systemd/system/plasma-wayland.service
+[Unit]
+Description=Start Plasma Mobile Wayland
+After=network.target display-manager.service
+
+[Service]
+Type=simple
+User=${USERNAME}
+Group=${USERNAME}
+PAMName=login
+
+EnvironmentFile=-/etc/environment
+ExecStart=/bin/bash -lc 'startplasma-mobile'
 Restart=no
 
 [Install]
@@ -282,6 +392,7 @@ RUN if [ "$ENABLE_mesa_ARG" = "true" ]; then \
     else \
         echo "--> [跳过] 未开启 Mesa 驱动安装"; \
     fi
+
 # 修复容器内的 DHCP 网络服务配置
 RUN mkdir -p /etc/systemd/network && \
     cat <<'EOF' > /etc/systemd/network/10-eth-dhcp.network

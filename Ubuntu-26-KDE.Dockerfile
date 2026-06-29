@@ -353,7 +353,7 @@ EOF
     ln -sf /etc/systemd/system/plasma-wayland.service /etc/systemd/system/multi-user.target.wants/plasma-wayland.service
     fi
 
-    # KDE Mobile Wayland 自启动（mobile 模式，使用 startplasma-mobile）
+    # KDE Mobile Wayland 自启动（mobile 模式，使用 startplasmamobile）
     if [ "$BUILD_KDE_plus" = "true" ] && [ "$BUILD_KDE" = "mobile" ]; then
     cat <<EOF > /etc/systemd/system/plasma-wayland.service
 [Unit]
@@ -367,7 +367,7 @@ Group=${USERNAME}
 PAMName=login
 
 EnvironmentFile=-/etc/environment
-ExecStart=/bin/bash -lc 'startplasma-mobile'
+ExecStart=/bin/bash -lc 'startplasmamobile'
 Restart=no
 
 [Install]

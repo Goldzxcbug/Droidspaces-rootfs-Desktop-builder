@@ -33,7 +33,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     openssh-server net-tools iptables iptables-legacy iputils iproute bind-utils \
     # 用于系统监控的 procps 进程工具
     procps-ng \
-    # 核心内核模块支持及语言包
+    # 核心内核模块 support 及其语言包
     kmod tzdata glibc-locale-source glibc-langpack-en glibc-langpack-zh && \
     ############################################## KDE支持 ################################################
     # 最小化KDE
@@ -172,11 +172,6 @@ RUN if [ "$PulseAudio" = "socket" ]; then \
     elif [ "$PulseAudio" = "tcp" ]; then \
         echo "PULSE_SERVER=tcp:127.0.0.1:4713" >> /etc/environment; \
     fi
-# 修复anland 音频堵塞
-# RUN if [ "$ENABLE_anland_kde_ARG" = "true" ]; then \
-#        mkdir -p /home/${USERNAME}/.config && \
-#       echo -e "\n[Sounds]\nEnable=false" >> /home/${USERNAME}/.config/kdeglobals ; \
-#     fi
 
 # 输入法开机自启动
 RUN <<'EOF_RUN'
@@ -327,7 +322,6 @@ getent group droidspaces-gpu >/dev/null || groupadd -g 786 -r droidspaces-gpu
 usermod -a -G aid_inet,aid_net_raw,input,video,tty,droidspaces-gpu root || true
 usermod -a -G aid_inet,aid_net_raw,input,video,tty,wheel,droidspaces-gpu ${USERNAME} || true
 
-# 确保未来通过 useradd 创建的新用户也会进入附加组 (Fedora 通过 /etc/default/useradd 处理)
 if [ -f /etc/default/useradd ]; then
     sed -i '/^GROUPS=/d' /etc/default/useradd
     echo 'GROUPS="aid_inet,aid_net_raw,input,video,tty"' >> /etc/default/useradd
@@ -360,6 +354,7 @@ if [ -f "$GUEST_SYSTEMD_PATH/dbus.service" ]; then
     ln -sf "$GUEST_SYSTEMD_PATH/dbus.service" "/etc/systemd/system/multi-user.target.wants/dbus.service"
 fi
 
+# [PATCHED] Prevent structural masking of critical networking components during build
 if [ "$ENABLE_yj_ARG" = "true" ]; then
     for service in systemd-udevd.service systemd-resolved.service systemd-networkd.service NetworkManager.service; do
         if [ -f "$GUEST_SYSTEMD_PATH/$service" ]; then
@@ -367,7 +362,7 @@ if [ "$ENABLE_yj_ARG" = "true" ]; then
         fi
     done
 else
-    for service in systemd-udevd.service systemd-resolved.service systemd-networkd.service NetworkManager.service; do
+    for service in systemd-udevd.service; do
         ln -sf /dev/null "/etc/systemd/system/$service"
     done
 fi
@@ -395,16 +390,7 @@ for unit in systemd-udevd.service systemd-udev-trigger.service systemd-udev-sett
     printf "[Unit]\nConditionPathIsReadWrite=\n" > "/etc/systemd/system/${unit}.d/99-readonly-fix.conf"
 done
 
-for unit in NetworkManager.service dhcpcd.service systemd-resolved.service systemd-networkd.service; do
-    if [ -f "$GUEST_SYSTEMD_PATH/$unit" ] || [ -f "/etc/systemd/system/multi-user.target.wants/$unit" ]; then
-        mkdir -p "/etc/systemd/system/${unit}.d"
-        cat > "/etc/systemd/system/${unit}.d/99-netmode-limit.conf" << 'EOF'
-[Service]
-ExecCondition=
-ExecCondition=/bin/sh -c "grep -qE 'net_mode=(nat|gateway)' /run/droidspaces/container.config"
-EOF
-    fi
-done
+# [PATCHED] Removed the 99-netmode-limit.conf loop that was blocking network daemons from starting up unless matching dynamic host settings.
 
 for unit in systemd-udevd.service systemd-udev-trigger.service systemd-udev-settle.service; do
     if [ -f "$GUEST_SYSTEMD_PATH/$unit" ] || [ -f "/etc/systemd/system/multi-user.target.wants/$unit" ]; then

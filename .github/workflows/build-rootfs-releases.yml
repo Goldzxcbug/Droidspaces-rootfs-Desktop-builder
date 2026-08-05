@@ -282,6 +282,21 @@ jobs:
           echo "等待 build-kde-wayland.yml run $run_id 完成..."
           gh run watch "$run_id" --repo "${{ github.repository }}" --exit-status --interval 60
 
+          # 下载并转发 build-kde-wayland.yml 产生的构件到当前工作流（作为 artifact）
+          echo "下载 build-kde-wayland.yml run $run_id 的构件..."
+          mkdir -p wayland_artifacts || true
+          # 尝试用 gh run download 把构件拉下来到 wayland_artifacts 目录（若没有构件也不失败）
+          gh run download "$run_id" --repo "${{ github.repository }}" --dir wayland_artifacts || true
+
+
+      - name: 上传 KDE Wayland 构件（供后续 release 使用）
+        if: ${{ github.event.inputs.build_wayland_packages == 'true' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: kde-wayland-packages
+          path: wayland_artifacts/**
+          retention-days: 1
+
   # --------------------------------------------------------
   # 阶段 2: build (常规 Linux 发行版 RootFS 的构建)
   # --------------------------------------------------------
@@ -342,7 +357,7 @@ jobs:
   # 阶段 3: release (汇总发布)
   # --------------------------------------------------------
   release:
-    needs: [setup, build]
+    needs: [setup, build, build-wayland-packages]
     if: ${{ !cancelled() && needs.setup.result == 'success' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
@@ -356,6 +371,14 @@ jobs:
         with:
           pattern: "*-rootfs"
           merge-multiple: true
+
+      - name: 下载 KDE Wayland 包产物（如果有）
+        uses: actions/download-artifact@v7
+        if: ${{ needs.setup.outputs.wayland_package_target != '' && github.event.inputs.build_wayland_packages == 'true' }}
+        with:
+          name: kde-wayland-packages
+          path: wayland_packages
+          # 不使用 merge-multiple，这里单独放到 wayland_packages 目录以便整理
           
       - name: 整理资源
         run: |
@@ -364,6 +387,11 @@ jobs:
           PA_CHOICE="${{ needs.setup.outputs.pulseaudio_effective }}"
           CUSTOM_USERNAME="${{ github.event.inputs.custom_username }}"
           build_KDE_plus="${{ github.event.inputs.build_KDE_plus }}"
+          # 若有 wayland 包产物，则一并复制到 release_assets
+          if [ -d "wayland_packages" ]; then
+            echo "发现 wayland_packages，复制到 release_assets/"
+            cp -r wayland_packages/* release_assets/ || true
+          fi
           if [ "$PA_CHOICE" != "none" ] && [ "$build_KDE_plus" = "false" ]; then
             cp "scripts/on_aaudio_${PA_CHOICE}.sh" "release_assets/on_aaudio_${PA_CHOICE}.sh"
             sed -i "s/USERNAME=\"Gold\"/USERNAME=\"${CUSTOM_USERNAME}\"/g" "release_assets/on_aaudio_${PA_CHOICE}.sh"

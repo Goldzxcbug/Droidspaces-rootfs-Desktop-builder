@@ -113,8 +113,14 @@ RUN echo "en_US.UTF-8 UTF-8" > /etc/locale.gen && \
 # 为所有 Arch RootFS 安装 Droidspaces USB Manager
 RUN /usr/local/sbin/install-droidspaces-usb-manager --user "${USERNAME}"
 
-# 修复 Arch 登入shell没法读取 /etc/environment 环境变量的问题
-RUN echo 'session  required  pam_env.so' >> /etc/pam.d/su-l
+# 为 droidspaces 的 su/su -l 入口建立完整的 systemd 用户会话。
+RUN for pam_file in /etc/pam.d/su /etc/pam.d/su-l; do \
+        if ! grep -qE '^[[:space:]-]*session[[:space:]].*pam_systemd\.so' "$pam_file"; then \
+            sed -i '/^[[:space:]]*session[[:space:]].*pam_unix\.so/a session        optional        pam_systemd.so' "$pam_file"; \
+        fi; \
+    done && \
+    grep -qE '^[[:space:]]*session[[:space:]].*pam_env\.so' /etc/pam.d/su-l || \
+        echo 'session        required        pam_env.so' >> /etc/pam.d/su-l
 
 # 添加环境变量
 RUN cat <<'EOF' > /etc/environment

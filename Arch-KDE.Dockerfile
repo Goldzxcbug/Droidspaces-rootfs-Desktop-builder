@@ -161,21 +161,18 @@ RUN if [ "$PulseAudio" = "socket" ]; then \
     fi
 
 RUN if [ "$ENABLE_anland_kde_ARG" = "true" ]; then \
-        cat <<'EOF' >> /etc/environment
-WAYLAND_DISPLAY=wayland-0
-QT_QPA_PLATFORM=wayland
-ANLAND=1
-ANLAND_SOCKET=/run/display.sock
-ANLAND_DRM_DEVICE=/dev/dri/renderD128
-XWAYLAND_GBM_DEVICE=/dev/dri/renderD128
-EOF
-
-RUN  if [ "$ENABLE_mesa_ARG" = "true" ]; then \
-            cat <<'EOF' >> /etc/environment
-MESA_LOADER_DRIVER_OVERRIDE=kgsl
-GALLIUM_DRIVER=kgsl
-FD_FORCE_KGSL=1
-EOF
+        echo 'WAYLAND_DISPLAY=wayland-0' >> /etc/environment; \
+        echo 'QT_QPA_PLATFORM=wayland' >> /etc/environment; \
+        echo 'ANLAND=1' >> /etc/environment; \
+        echo 'ANLAND_SOCKET=/run/display.sock' >> /etc/environment; \
+        echo 'ANLAND_DRM_DEVICE=/dev/dri/renderD128' >> /etc/environment; \
+        echo 'XWAYLAND_GBM_DEVICE=/dev/dri/renderD128' >> /etc/environment; \
+        if [ "$ENABLE_mesa_ARG" = "true" ]; then \
+            echo 'MESA_LOADER_DRIVER_OVERRIDE=kgsl' >> /etc/environment; \
+            echo 'GALLIUM_DRIVER=kgsl' >> /etc/environment; \
+            echo 'FD_FORCE_KGSL=1' >> /etc/environment; \
+        fi; \
+    fi
 
 RUN if [ "$ENABLE_8gen2_wayland_ARG" = "true" ]; then \
         echo 'FD_DEV_FEATURES=enable_tp_ubwc_flag_hint=1' >> /etc/environment; \

@@ -22,7 +22,7 @@ on:
         type: string
         default: 'main'
       anland_repo:
-        description: 'anland 仓库地址（默认上游，可填你的 fork）'
+        description: 'anland 仓库地址（默认上游；'
         required: false
         type: string
         default: 'https://github.com/superturtlee/anland.git'
@@ -147,6 +147,7 @@ jobs:
           mkdir -p "$OUTPUT_DIR"
 
           docker run --rm \
+            --platform linux/arm64 \
             -e ANLAND_REPO \
             -e ANLAND_REF \
             -e BUILD_SCRIPT \
@@ -177,10 +178,10 @@ jobs:
                   useradd -m -s /bin/bash anland
                   printf "anland ALL=(root) NOPASSWD: /usr/bin/pacman\n" > /etc/sudoers.d/anland-pacman
                   chmod 0440 /etc/sudoers.d/anland-pacman
-                  if grep -q '^#PACMAN_AUTH=()' /etc/makepkg.conf; then
-                    sed -i 's/^#PACMAN_AUTH=().*/PACMAN_AUTH=(sudo)/' /etc/makepkg.conf
+                  if grep -q "^#PACMAN_AUTH=()" /etc/makepkg.conf; then
+                    sed -i "s/^#PACMAN_AUTH=().*/PACMAN_AUTH=(sudo)/" /etc/makepkg.conf
                   else
-                    printf '\nPACMAN_AUTH=(sudo)\n' >> /etc/makepkg.conf
+                    printf "\\nPACMAN_AUTH=(sudo)\\n" >> /etc/makepkg.conf
                   fi
                   chown -R anland:anland /tmp/anland-build
                   ;;
@@ -208,6 +209,7 @@ jobs:
 
               if [ "$BUILD_TARGET" = "Arch" ]; then
                 su -s /bin/bash anland -c "cd /tmp/anland/$(dirname "$BUILD_SCRIPT") && WORKDIR=/tmp/anland-build ./$(basename "$BUILD_SCRIPT") --noconfirm"
+                chmod -R a+rwX /tmp/anland-build
               else
                 WORKDIR=/root/anland-build sudo -E "./$(basename "$BUILD_SCRIPT")"
               fi

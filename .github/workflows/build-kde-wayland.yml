@@ -14,6 +14,7 @@ on:
           - 'Debian13'
           - 'Fedora43'
           - 'Fedora44'
+          - 'Arch'
           - 'all'
       anland_ref:
         description: 'anland 仓库分支、标签或 commit'
@@ -57,9 +58,9 @@ jobs:
 
           case "${{ github.event.inputs.build_target }}" in
             all)
-              targets='["ubuntu2604","Debian13","Fedora43","Fedora44"]'
+              targets='["ubuntu2604","Debian13","Fedora43","Fedora44","Arch"]'
               ;;
-            ubuntu2604|Debian13|Fedora43|Fedora44)
+            ubuntu2604|Debian13|Fedora43|Fedora44|Arch)
               targets='["${{ github.event.inputs.build_target }}"]'
               ;;
             *)
@@ -121,6 +122,12 @@ jobs:
               echo "dest=anland-build/Fedora44" >> "$GITHUB_OUTPUT"
               echo "pkg_pattern=*.rpm" >> "$GITHUB_OUTPUT"
               ;;
+            Arch)
+              echo "image=ogarcia/archlinux:latest" >> "$GITHUB_OUTPUT"
+              echo "script=producers/kde/Arch_v5/build.sh" >> "$GITHUB_OUTPUT"
+              echo "dest=anland-build/Arch" >> "$GITHUB_OUTPUT"
+              echo "pkg_pattern=*.pkg.tar.*" >> "$GITHUB_OUTPUT"
+              ;;
             *)
               echo "不支持的构建目标: $BUILD_TARGET" >&2
               exit 1
@@ -146,6 +153,7 @@ jobs:
             -e BUILD_TARGET \
             -e PKG_PATTERN \
             -v "$PWD/$OUTPUT_DIR:/root/anland-build" \
+            -v "$PWD/$OUTPUT_DIR:/tmp/anland-build" \
             "$DISTRO_IMAGE" \
             bash -lc '
               set -euo pipefail
@@ -162,6 +170,14 @@ jobs:
                   dnf install -y --setopt=install_weak_deps=False \
                     git ca-certificates sudo \
                     dnf-plugins-core rpmdevtools rpm-build patch tar xz
+                  ;;
+                Arch)
+                  pacman -Syu --noconfirm
+                  pacman -S --noconfirm --needed base-devel git ca-certificates sudo
+                  useradd -m -s /bin/bash anland
+                  printf "anland ALL=(root) NOPASSWD: /usr/bin/pacman\n" > /etc/sudoers.d/anland-pacman
+                  chmod 0440 /etc/sudoers.d/anland-pacman
+                  chown -R anland:anland /tmp/anland-build
                   ;;
               esac
 
@@ -185,7 +201,11 @@ jobs:
 
               cd "/tmp/anland/$(dirname "$BUILD_SCRIPT")"
 
-              WORKDIR=/root/anland-build sudo -E "./$(basename "$BUILD_SCRIPT")"
+              if [ "$BUILD_TARGET" = "Arch" ]; then
+                su - anland -c "cd /tmp/anland/$(dirname \"$BUILD_SCRIPT\") && WORKDIR=/tmp/anland-build ./$(basename \"$BUILD_SCRIPT\")"
+              else
+                WORKDIR=/root/anland-build sudo -E "./$(basename "$BUILD_SCRIPT")"
+              fi
             '
 
       - name: 更新本仓库预编译包目录
@@ -201,25 +221,29 @@ jobs:
           # 包名包含版本号；清理扁平目录中的旧包，避免新旧版本共存。
           # 同时删除旧版目录布局，兼容目录扁平化前留下的产物。
           find "$DEST_DIR" -maxdepth 1 -type f \
-            \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \) -delete
+            \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.*' \) -delete
           rm -rf "$DEST_DIR/kwin" "$DEST_DIR/xwayland"
 
           # 按包格式收集产物
-          test -d "$OUTPUT_DIR/kwin" && find "$OUTPUT_DIR/kwin" -maxdepth 1 -type f -name "$PKG_PATTERN" ! -name '*debug*' ! -name '*dbgsym*' ! -name '*.src.*' ! -name 'kwin-dev_*' ! -name 'kwin-devel-*' ! -name 'kwin-doc-*' -exec cp -v {} "$DEST_DIR/" \;
-          test -d "$OUTPUT_DIR/xwayland" && find "$OUTPUT_DIR/xwayland" -maxdepth 1 -type f -name "$PKG_PATTERN" ! -name '*debug*' ! -name '*dbgsym*' ! -name '*.src.*' ! -name 'xorg-x11-server-Xwayland-devel-*' -exec cp -v {} "$DEST_DIR/" \;
+          if [ "$BUILD_TARGET" = "Arch" ]; then
+            find "$OUTPUT_DIR" -type f -name "$PKG_PATTERN" ! -name '*debug*' ! -name '*.src.*' -exec cp -v {} "$DEST_DIR/" \;
+          else
+            test -d "$OUTPUT_DIR/kwin" && find "$OUTPUT_DIR/kwin" -maxdepth 1 -type f -name "$PKG_PATTERN" ! -name '*debug*' ! -name '*dbgsym*' ! -name '*.src.*' ! -name 'kwin-dev_*' ! -name 'kwin-devel-*' ! -name 'kwin-doc-*' -exec cp -v {} "$DEST_DIR/" \;
+            test -d "$OUTPUT_DIR/xwayland" && find "$OUTPUT_DIR/xwayland" -maxdepth 1 -type f -name "$PKG_PATTERN" ! -name '*debug*' ! -name '*dbgsym*' ! -name '*.src.*' ! -name 'xorg-x11-server-Xwayland-devel-*' -exec cp -v {} "$DEST_DIR/" \;
 
-          # Fedora 的 xwayland 包名不同，尝试备选目录
-          if [ ! -d "$OUTPUT_DIR/xwayland" ] && [ -d "$OUTPUT_DIR/xorg-x11-server-Xwayland" ]; then
-            find "$OUTPUT_DIR/xorg-x11-server-Xwayland" -maxdepth 1 -type f -name "$PKG_PATTERN" ! -name '*.src.*' ! -name 'xorg-x11-server-Xwayland-devel-*' -exec cp -v {} "$DEST_DIR/" \;
+            # Fedora 的 xwayland 包名不同，尝试备选目录
+            if [ ! -d "$OUTPUT_DIR/xwayland" ] && [ -d "$OUTPUT_DIR/xorg-x11-server-Xwayland" ]; then
+              find "$OUTPUT_DIR/xorg-x11-server-Xwayland" -maxdepth 1 -type f -name "$PKG_PATTERN" ! -name '*.src.*' ! -name 'xorg-x11-server-Xwayland-devel-*' -exec cp -v {} "$DEST_DIR/" \;
+            fi
           fi
 
-          pkg_count="$(find "$DEST_DIR" -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \) | wc -l)"
+          pkg_count="$(find "$DEST_DIR" -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.*' \) | wc -l)"
           if [ "$pkg_count" -eq 0 ]; then
             echo "没有找到生成的包" >&2
             exit 1
           fi
 
-          find "$DEST_DIR" -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \) -print | sort
+          find "$DEST_DIR" -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.*' \) -print | sort
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v6
@@ -262,7 +286,7 @@ jobs:
           for artifact_dir in "${artifact_dirs[@]}"; do
             target="${artifact_dir##*/anland-pkgs-}"
             case "$target" in
-              ubuntu2604|Debian13|Fedora43|Fedora44)
+              ubuntu2604|Debian13|Fedora43|Fedora44|Arch)
                 ;;
               *)
                 echo "不支持的构建产物目标: $target" >&2
@@ -274,11 +298,11 @@ jobs:
             mkdir -p "$dest_dir"
             # 构建产物文件名带版本号，复制前必须移除目标目录中的旧包。
             find "$dest_dir" -maxdepth 1 -type f \
-              \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \) -delete
+              \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.*' \) -delete
             rm -rf "$dest_dir/kwin" "$dest_dir/xwayland"
             cp -a "$artifact_dir/." "$dest_dir/"
 
-            pkg_count="$(find "$dest_dir" -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \) | wc -l)"
+            pkg_count="$(find "$dest_dir" -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.*' \) | wc -l)"
             if [ "$pkg_count" -eq 0 ]; then
               echo "没有找到 $target 的构建包" >&2
               exit 1

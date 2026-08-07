@@ -9,6 +9,8 @@ ARG ENABLE_zh_tz_ARG
 ARG ENABLE_binfmt_ARG
 ARG ENABLE_yj_ARG
 ARG ENABLE_mesa_ARG
+ARG ENABLE_anland_kde_ARG
+ARG ENABLE_8gen2_wayland_ARG
 ARG ENABLE_kfgj_ARG
 ARG ENABLE_zip_ARG
 ARG ENABLE_docker_ARG
@@ -20,6 +22,7 @@ ARG USERNAME
 
 COPY scripts/install-usb-manager.sh /usr/local/sbin/install-droidspaces-usb-manager
 COPY scripts/systemd257.sh /usr/local/sbin/systemd257
+COPY anland-build/Arch/ /tmp/anland-build/Arch/
 
 RUN sed -i '/^#ParallelDownloads/s/^#//' /etc/pacman.conf && \
     sed -i '/NoExtract.*locale/d' /etc/pacman.conf && \
@@ -87,6 +90,27 @@ RUN sed -i '/^#ParallelDownloads/s/^#//' /etc/pacman.conf && \
         chmod -R 755 /usr/local/etc/tmoe-linux; \
     fi 
 
+# 启用 Anland 时使用针对 ARM64 Droidspaces 的 patched KWin/Xwayland。
+# LocalFileSigLevel 只用于本地构建产物，不能放宽仓库包的签名校验。
+RUN if [ "$ENABLE_anland_kde_ARG" = "true" ]; then \
+        set -- /tmp/anland-build/Arch/*.pkg.tar.*; \
+        if [ ! -f "$1" ]; then \
+            echo "ENABLE_anland_kde_ARG=true requires packages in anland-build/Arch" >&2; \
+            exit 1; \
+        fi; \
+        cp /etc/pacman.conf /tmp/pacman-anland.conf; \
+        if grep -q '^#LocalFileSigLevel = Optional$' /tmp/pacman-anland.conf; then \
+            sed -i 's/^#LocalFileSigLevel = Optional$/LocalFileSigLevel = Optional/' /tmp/pacman-anland.conf; \
+        else \
+            printf '\n[options]\nLocalFileSigLevel = Optional\n' >> /tmp/pacman-anland.conf; \
+        fi; \
+        pacman --config /tmp/pacman-anland.conf -U --noconfirm "$@"; \
+        if ! grep -q '^IgnorePkg.*kwin' /etc/pacman.conf; then \
+            sed -i '/^\[options\]$/a IgnorePkg = kwin xorg-xwayland' /etc/pacman.conf; \
+        fi; \
+        rm -f /tmp/pacman-anland.conf /tmp/anland-build/Arch/*.pkg.tar.*; \
+    fi
+
 # 配置 Locale 与 SSH
 RUN echo "en_US.UTF-8 UTF-8" > /etc/locale.gen && \
     if [ "$ENABLE_zh_tz_ARG" = "true" ]; then \
@@ -116,7 +140,7 @@ RUN /usr/local/sbin/install-droidspaces-usb-manager --user "${USERNAME}"
 # 为 droidspaces 的 su/su -l 入口建立完整的 systemd 用户会话。
 RUN for pam_file in /etc/pam.d/su /etc/pam.d/su-l; do \
         if ! grep -qE '^[[:space:]-]*session[[:space:]].*pam_systemd\.so' "$pam_file"; then \
-            sed -i '/^[[:space:]]*session[[:space:]].*pam_unix\.so/a session        optional        pam_systemd.so' "$pam_file"; \
+            sed -i '/^[[:space:]]*session[[:space:]].*pam_unix\.so/a\session        optional        pam_systemd.so' "$pam_file"; \
         fi; \
     done && \
     grep -qE '^[[:space:]]*session[[:space:]].*pam_env\.so' /etc/pam.d/su-l || \
@@ -125,13 +149,36 @@ RUN for pam_file in /etc/pam.d/su /etc/pam.d/su-l; do \
 # 添加环境变量
 RUN cat <<'EOF' > /etc/environment
 XCURSOR_SIZE=48
-DISPLAY=:5
 EOF
+RUN if [ "$ENABLE_anland_kde_ARG" != "true" ]; then \
+        echo 'DISPLAY=:5' >> /etc/environment; \
+    fi
 # 音频选择
 RUN if [ "$PulseAudio" = "socket" ]; then \
         echo "PULSE_SERVER=unix:/tmp/.pulse-socket" >> /etc/environment; \
     elif [ "$PulseAudio" = "tcp" ]; then \
         echo "PULSE_SERVER=tcp:127.0.0.1:4713" >> /etc/environment; \
+    fi
+
+RUN if [ "$ENABLE_anland_kde_ARG" = "true" ]; then \
+        cat <<'EOF' >> /etc/environment
+WAYLAND_DISPLAY=wayland-0
+QT_QPA_PLATFORM=wayland
+ANLAND=1
+ANLAND_SOCKET=/run/display.sock
+ANLAND_DRM_DEVICE=/dev/dri/renderD128
+XWAYLAND_GBM_DEVICE=/dev/dri/renderD128
+EOF
+
+RUN  if [ "$ENABLE_mesa_ARG" = "true" ]; then \
+            cat <<'EOF' >> /etc/environment
+MESA_LOADER_DRIVER_OVERRIDE=kgsl
+GALLIUM_DRIVER=kgsl
+FD_FORCE_KGSL=1
+EOF
+
+RUN if [ "$ENABLE_8gen2_wayland_ARG" = "true" ]; then \
+        echo 'FD_DEV_FEATURES=enable_tp_ubwc_flag_hint=1' >> /etc/environment; \
     fi
 
 # 输入法与 KDE 开机自启动配置
@@ -160,14 +207,14 @@ SDL_IM_MODULE=fcitx5
 GLFW_IM_MODULE=fcitx
 EOF
 fi
-    if [ "$ENABLE_mesa_ARG" = "true" ] ; then
+    if [ "$ENABLE_mesa_ARG" = "true" ] && [ "$ENABLE_anland_kde_ARG" != "true" ] ; then
         cat <<'EOF' >> /etc/environment
 MESA_LOADER_DRIVER_OVERRIDE=kgsl
 TU_DEBUG=noconform
 EOF
     fi
     echo 'export XDG_RUNTIME_DIR=/run/user/$(id -u)' >> /home/${USERNAME}/.bashrc
-    if [ "$BUILD_KDE" = "min" ] || [ "$BUILD_KDE" = "conc" ] ; then
+    if { [ "$BUILD_KDE" = "min" ] || [ "$BUILD_KDE" = "conc" ]; } && [ "$ENABLE_anland_kde_ARG" != "true" ] ; then
     mkdir -p /home/${USERNAME}/.config
     cat <<'EOF' > /home/${USERNAME}/.config/kwinrc
 [Compositing]
@@ -175,7 +222,11 @@ Enabled=false
 EOF
     fi
     chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}
-    if [ "$BUILD_KDE_plus" = "true" ] ; then
+    if [ "$BUILD_KDE_plus" = "true" ] && [ "$ENABLE_anland_kde_ARG" = "true" ] ; then
+    install -Dm644 /tmp/droidspaces-start/plasma-wayland.service /etc/systemd/system/plasma-wayland.service
+    mkdir -p /etc/systemd/system/multi-user.target.wants
+    ln -sf /etc/systemd/system/plasma-wayland.service /etc/systemd/system/multi-user.target.wants/plasma-wayland.service
+    elif [ "$BUILD_KDE_plus" = "true" ] ; then
     install -Dm644 /tmp/droidspaces-start/plasma-x11.service /etc/systemd/system/plasma-x11.service
     mkdir -p /etc/systemd/system/multi-user.target.wants
     ln -sf /etc/systemd/system/plasma-x11.service /etc/systemd/system/multi-user.target.wants/plasma-x11.service

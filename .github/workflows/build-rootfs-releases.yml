@@ -39,7 +39,7 @@ on:
         type: boolean
         default: true
       enable_anland_kde:
-        description: 'Wayland 支持（支持 Debian-13、Ubuntu-26、Fedora-43/44,选择 mobile 强制 wayland）'
+        description: 'Wayland 支持（支持 Debian-13、Ubuntu-26、Fedora-43/44、Arch；选择 mobile 强制 wayland）'
         required: true
         type: boolean
         default: false
@@ -151,7 +151,11 @@ jobs:
               WAYLAND_PACKAGE_TARGET="all"
               ;;
             all-wayland)
-              TEMPLATES=$(jq -n -c '["Debian-13-KDE","Ubuntu-26-KDE","Fedora-43-KDE","Fedora-44-KDE"]')
+              if [ "$BUILD_KDE" = "mobile" ]; then
+                TEMPLATES=$(jq -n -c '["Debian-13-KDE","Ubuntu-26-KDE","Fedora-43-KDE","Fedora-44-KDE"]')
+              else
+                TEMPLATES=$(jq -n -c '["Debian-13-KDE","Ubuntu-26-KDE","Fedora-43-KDE","Fedora-44-KDE","Arch-KDE"]')
+              fi
               ENABLE_ANLAND_KDE="true"
               WAYLAND_PACKAGE_TARGET="all"
               ;;
@@ -170,6 +174,10 @@ jobs:
             Fedora-44-KDE)
               TEMPLATES=$(jq -n -c --arg t "$TARGET" '[$t]')
               WAYLAND_PACKAGE_TARGET="Fedora44"
+              ;;
+            Arch-KDE)
+              TEMPLATES=$(jq -n -c --arg t "$TARGET" '[$t]')
+              WAYLAND_PACKAGE_TARGET="Arch"
               ;;
             *)
               TEMPLATES=$(jq -n -c --arg t "$TARGET" '[$t]')
@@ -197,7 +205,7 @@ jobs:
           fi
 
           if [ "$BUILD_WAYLAND_PACKAGES" = "true" ] && [ -z "$WAYLAND_PACKAGE_TARGET" ]; then
-            echo "错误: KDE Wayland 预编译包仅支持 Debian-13-KDE、Ubuntu-26-KDE、Fedora-43-KDE、Fedora-44-KDE、all 或 all-wayland" >&2
+            echo "错误: KDE Wayland 预编译包仅支持 Debian-13-KDE、Ubuntu-26-KDE、Fedora-43-KDE、Fedora-44-KDE、Arch-KDE、all 或 all-wayland" >&2
             exit 1
           fi
           

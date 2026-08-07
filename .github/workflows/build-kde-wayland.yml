@@ -202,7 +202,7 @@ jobs:
               cd "/tmp/anland/$(dirname "$BUILD_SCRIPT")"
 
               if [ "$BUILD_TARGET" = "Arch" ]; then
-                su - anland -c "cd /tmp/anland/$(dirname \"$BUILD_SCRIPT\") && WORKDIR=/tmp/anland-build ./$(basename \"$BUILD_SCRIPT\")"
+                su -s /bin/bash anland -c "cd /tmp/anland/$(dirname "$BUILD_SCRIPT") && WORKDIR=/tmp/anland-build ./$(basename "$BUILD_SCRIPT")"
               else
                 WORKDIR=/root/anland-build sudo -E "./$(basename "$BUILD_SCRIPT")"
               fi

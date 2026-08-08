@@ -1,4 +1,4 @@
-name: 构建并更新 KDE Wayland 预编译包(anland)
+name: 构建并发布 KDE Wayland 预编译包(anland)
 run-name: KDE Wayland ${{ inputs.build_target }} ${{ inputs.request_id }}
 
 on:
@@ -31,6 +31,11 @@ on:
         required: true
         type: boolean
         default: true
+      create_release:
+        description: '发布预编译包为 GitHub Release（滚动更新）'
+        required: true
+        type: boolean
+        default: true
       request_id:
         description: '调用方传入的请求 ID，用于等待对应 workflow run'
         required: false
@@ -41,7 +46,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: build-kde-wayland-${{ github.ref }}-${{ github.event.inputs.build_target }}
+  group: build-kde-wayland-${{ github.ref }}-${{ inputs.build_target }}
   cancel-in-progress: false
 
 jobs:
@@ -56,15 +61,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          case "${{ github.event.inputs.build_target }}" in
+          case "${{ inputs.build_target }}" in
             all)
               targets='["ubuntu2604","Debian13","Fedora43","Fedora44","Arch"]'
               ;;
             ubuntu2604|Debian13|Fedora43|Fedora44|Arch)
-              targets='["${{ github.event.inputs.build_target }}"]'
+              targets='["${{ inputs.build_target }}"]'
               ;;
             *)
-              echo "不支持的构建目标: ${{ github.event.inputs.build_target }}" >&2
+              echo "不支持的构建目标: ${{ inputs.build_target }}" >&2
               exit 1
               ;;
           esac
@@ -82,8 +87,8 @@ jobs:
         target: ${{ fromJson(needs.setup.outputs.targets) }}
 
     env:
-      ANLAND_REPO: ${{ github.event.inputs.anland_repo }}
-      ANLAND_REF: ${{ github.event.inputs.anland_ref }}
+      ANLAND_REPO: ${{ inputs.anland_repo }}
+      ANLAND_REF: ${{ inputs.anland_ref }}
       BUILD_TARGET: ${{ matrix.target }}
 
     steps:
@@ -103,24 +108,29 @@ jobs:
               echo "script=producers/kde/ubuntu2604_v5/build.sh" >> "$GITHUB_OUTPUT"
               echo "dest=anland-build/ubuntu2604" >> "$GITHUB_OUTPUT"
               echo "pkg_pattern=*.deb" >> "$GITHUB_OUTPUT"
+              echo "display_name=Ubuntu 26.04" >> "$GITHUB_OUTPUT"
               ;;
             Debian13)
               echo "image=debian:trixie" >> "$GITHUB_OUTPUT"
               echo "script=producers/kde/Debian13_v5/build.sh" >> "$GITHUB_OUTPUT"
               echo "dest=anland-build/Debian13" >> "$GITHUB_OUTPUT"
               echo "pkg_pattern=*.deb" >> "$GITHUB_OUTPUT"
+              echo "display_name=Debian 13 (Trixie)" >> "$GITHUB_OUTPUT"
               ;;
             Fedora43)
               echo "image=fedora:43" >> "$GITHUB_OUTPUT"
               echo "script=producers/kde/Fedora43_v5/build.sh" >> "$GITHUB_OUTPUT"
               echo "dest=anland-build/Fedora43" >> "$GITHUB_OUTPUT"
               echo "pkg_pattern=*.rpm" >> "$GITHUB_OUTPUT"
+              echo "display_name=Fedora 43" >> "$GITHUB_OUTPUT"
               ;;
             Fedora44)
               echo "image=fedora:44" >> "$GITHUB_OUTPUT"
+              # Fedora 44 复用 Fedora 43 的构建脚本
               echo "script=producers/kde/Fedora43_v5/build.sh" >> "$GITHUB_OUTPUT"
               echo "dest=anland-build/Fedora44" >> "$GITHUB_OUTPUT"
               echo "pkg_pattern=*.rpm" >> "$GITHUB_OUTPUT"
+              echo "display_name=Fedora 44" >> "$GITHUB_OUTPUT"
               ;;
             Arch)
               echo "image=ogarcia/archlinux:latest" >> "$GITHUB_OUTPUT"
@@ -250,10 +260,11 @@ jobs:
             exit 1
           fi
 
+          echo "共收集到 ${pkg_count} 个预编译包:"
           find "$DEST_DIR" -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.*' \) -print | sort
 
-      - name: 上传构建产物
-        uses: actions/upload-artifact@v6
+      - name: 上传构建产物 (Artifact)
+        uses: actions/upload-artifact@v4
         with:
           name: anland-pkgs-${{ matrix.target }}
           path: ${{ steps.target.outputs.dest }}
@@ -276,7 +287,6 @@ jobs:
           path: .anland-artifacts
           pattern: anland-pkgs-*
           merge-multiple: false
-
 
       - name: 提交更新
         run: |
@@ -326,6 +336,74 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A "${changed_paths[@]}"
-          git commit -m "Update anland KDE Wayland packages (${{ github.event.inputs.build_target }})"
+          git commit -m "Update anland KDE Wayland packages (${{ inputs.build_target }})"
           git pull --rebase --autostash origin "${{ github.ref_name }}" || true
           git push
+
+  release:
+    name: 发布 Release
+    needs: [setup, build]
+    if: ${{ github.event.inputs.create_release == 'true' && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出仓库（gh release 需要 git 上下文）
+        uses: actions/checkout@v5
+
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: .anland-artifacts
+          pattern: anland-pkgs-*
+          merge-multiple: false
+
+      - name: 为每个构建目标发布 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANLAND_REF: ${{ inputs.anland_ref }}
+          ANLAND_REPO: ${{ inputs.anland_repo }}
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          artifact_dirs=(.anland-artifacts/anland-pkgs-*)
+          if [ "${#artifact_dirs[@]}" -eq 0 ]; then
+            echo "没有下载到构建产物" >&2
+            exit 1
+          fi
+
+          BUILD_TIME="$(date +'%Y-%m-%d %H:%M:%S')"
+
+          for artifact_dir in "${artifact_dirs[@]}"; do
+            target="${artifact_dir##*/anland-pkgs-}"
+            case "$target" in
+              ubuntu2604)     display_name="Ubuntu 26.04";;
+              Debian13)       display_name="Debian 13 (Trixie)";;
+              Fedora43)       display_name="Fedora 43";;
+              Fedora44)       display_name="Fedora 44";;
+              Arch)           display_name="Arch Linux";;
+              *)
+                echo "不支持的构建产物目标: $target" >&2
+                exit 1
+                ;;
+            esac
+
+            release_tag="anland-pkgs-${target}"
+            echo "--- 发布 ${display_name} (${target}) ---"
+
+            # 打包为 anland-build/<target>/ 结构（与 install.sh 预期一致）
+            bundle="/tmp/anland-pkgs-${target}.tar.gz"
+            pkg_dir="/tmp/anland-pkg/anland-build/${target}"
+            mkdir -p "$pkg_dir"
+            cp "$artifact_dir"/*.deb "$artifact_dir"/*.rpm "$artifact_dir"/*.pkg.tar.* "$pkg_dir/" 2>/dev/null || true
+            tar -czf "$bundle" -C "/tmp/anland-pkg" .
+
+            # 创建 release（只发一个 tar.gz 压缩包）
+            gh release delete "$release_tag" --cleanup-tag -y 2>/dev/null || true
+            sleep 2
+            gh release create "$release_tag" \
+              --title "KDE Wayland 预编译包 - ${display_name}" \
+              --notes "构建时间: ${BUILD_TIME} | anland: ${ANLAND_REF}" \
+              "$bundle"
+
+            echo "已发布: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${release_tag}"
+          done

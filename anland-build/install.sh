@@ -2,6 +2,8 @@
 set -euo pipefail
 
 readonly REPO_ARCHIVE_URL="https://github.com/Goldzxcbug/Droidspaces-rootfs-KDE-builder/archive/refs/heads/main.tar.gz"
+# 从 REPO_ARCHIVE_URL 派生 Release 下载地址，修改上游时无需单独改这里
+readonly RELEASE_DOWNLOAD_BASE="${REPO_ARCHIVE_URL%/archive/*}/releases/download"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P || true)"
 WORK_DIR=""
 UI_LANG="en"
@@ -108,23 +110,47 @@ has_packages() {
 download_packages() {
     local archive extract_root
     WORK_DIR="$(mktemp -d -t anland-build.XXXXXXXX)"
-    archive="$WORK_DIR/repository.tar.gz"
+    archive="$WORK_DIR/packages.tar.gz"
+    local release_url="${RELEASE_DOWNLOAD_BASE}/anland-pkgs-${TARGET}/anland-pkgs-${TARGET}.tar.gz"
+    local downloaded=false
 
-    log "本地未找到 ${TARGET} 安装包，正在下载仓库快照..." \
-        "Local ${TARGET} packages were not found; downloading the repository snapshot..."
+    # 优先从 GitHub Release 下载（速度快、体积小）
+    log "正在从 GitHub Release 下载 ${TARGET} 预编译包..." \
+        "Downloading ${TARGET} prebuilt packages from GitHub Release..."
     if command -v curl >/dev/null 2>&1; then
-        curl -fL --retry 3 --connect-timeout 20 "$REPO_ARCHIVE_URL" -o "$archive"
+        if curl -fL --retry 3 --connect-timeout 20 "$release_url" -o "$archive" 2>/dev/null; then
+            downloaded=true
+        fi
     elif command -v wget >/dev/null 2>&1; then
-        wget -O "$archive" "$REPO_ARCHIVE_URL"
-    else
-        die "未找到 curl 或 wget，无法下载安装包。" "Neither curl nor wget was found; packages cannot be downloaded."
+        if wget -O "$archive" "$release_url" 2>/dev/null; then
+            downloaded=true
+        fi
     fi
 
-    tar -xzf "$archive" -C "$WORK_DIR"
-    extract_root="$(find "$WORK_DIR" -mindepth 1 -maxdepth 1 -type d -print -quit)"
-    [[ -n "$extract_root" ]] || die "下载的仓库快照内容异常。" "The downloaded repository snapshot is invalid."
-    PACKAGE_DIR="$extract_root/anland-build/$TARGET"
-    has_packages "$PACKAGE_DIR" || die "仓库快照中缺少 ${TARGET} 的安装包。" "The repository snapshot does not contain packages for ${TARGET}."
+    # 如果 Release 下载失败，回退到仓库快照
+    if [ "$downloaded" != true ]; then
+        log "Release 下载失败，回退到仓库快照..." \
+            "Release download failed; falling back to repository snapshot..."
+        archive="$WORK_DIR/repository.tar.gz"
+        if command -v curl >/dev/null 2>&1; then
+            curl -fL --retry 3 --connect-timeout 20 "$REPO_ARCHIVE_URL" -o "$archive"
+        elif command -v wget >/dev/null 2>&1; then
+            wget -O "$archive" "$REPO_ARCHIVE_URL"
+        else
+            die "未找到 curl 或 wget，无法下载安装包。" "Neither curl nor wget was found; packages cannot be downloaded."
+        fi
+
+        tar -xzf "$archive" -C "$WORK_DIR"
+        extract_root="$(find "$WORK_DIR" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+        [[ -n "$extract_root" ]] || die "下载的仓库快照内容异常。" "The downloaded repository snapshot is invalid."
+        PACKAGE_DIR="$extract_root/anland-build/$TARGET"
+    else
+        # Release tar.gz 结构: anland-build/<TARGET>/*.deb
+        tar -xzf "$archive" -C "$WORK_DIR"
+        PACKAGE_DIR="$WORK_DIR/anland-build/$TARGET"
+    fi
+
+    has_packages "$PACKAGE_DIR" || die "未能获取 ${TARGET} 的安装包。" "Could not obtain packages for ${TARGET}."
 }
 
 locate_packages() {

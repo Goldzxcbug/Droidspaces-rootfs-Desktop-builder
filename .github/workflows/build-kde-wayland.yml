@@ -392,6 +392,7 @@ jobs:
 
             # 打包为 anland-build/<target>/ 结构（与 install.sh 预期一致）
             bundle="/tmp/anland-pkgs-${target}.tar.gz"
+            rm -rf /tmp/anland-pkg
             pkg_dir="/tmp/anland-pkg/anland-build/${target}"
             mkdir -p "$pkg_dir"
             cp "$artifact_dir"/*.deb "$artifact_dir"/*.rpm "$artifact_dir"/*.pkg.tar.* "$pkg_dir/" 2>/dev/null || true

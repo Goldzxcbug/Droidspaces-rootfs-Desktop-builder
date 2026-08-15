@@ -151,13 +151,17 @@ jobs:
               WAYLAND_PACKAGE_TARGET="all"
               ;;
             all-wayland)
-              TEMPLATES=$(jq -n -c '["Debian-13-KDE","Ubuntu-26-KDE","Fedora-43-KDE","Fedora-44-KDE","Arch-KDE"]')
+              TEMPLATES=$(jq -n -c '["Debian-13-KDE","Ubuntu-24-KDE","Ubuntu-26-KDE","Fedora-43-KDE","Fedora-44-KDE","Arch-KDE"]')
               ENABLE_ANLAND_KDE="true"
               WAYLAND_PACKAGE_TARGET="all"
               ;;
             Debian-13-KDE)
               TEMPLATES=$(jq -n -c --arg t "$TARGET" '[$t]')
               WAYLAND_PACKAGE_TARGET="Debian13"
+              ;;
+            Ubuntu-24-KDE)
+              TEMPLATES=$(jq -n -c --arg t "$TARGET" '[$t]')
+              WAYLAND_PACKAGE_TARGET="ubuntu2404"
               ;;
             Ubuntu-26-KDE)
               TEMPLATES=$(jq -n -c --arg t "$TARGET" '[$t]')
@@ -201,7 +205,7 @@ jobs:
           fi
 
           if [ "$BUILD_WAYLAND_PACKAGES" = "true" ] && [ -z "$WAYLAND_PACKAGE_TARGET" ]; then
-            echo "Error: KDE Wayland precompiled packages are only available for Debian-13-KDE, Ubuntu-26-KDE, Fedora-43-KDE, Fedora-44-KDE, Arch-KDE, all, or all-wayland" >&2
+            echo "Error: KDE Wayland precompiled packages are only available for Debian-13-KDE, Ubuntu-24-KDE, Ubuntu-26-KDE, Fedora-43-KDE, Fedora-44-KDE, Arch-KDE, all, or all-wayland" >&2
             exit 1
           fi
           
@@ -260,245 +264,4 @@ jobs:
             -f "inputs[anland_repo]=https://github.com/superturtlee/anland.git" \
             -f "inputs[request_id]=$REQUEST_ID"
 
-          echo "Triggered build-kde-wayland.yml for target=$WAYLAND_PACKAGE_TARGET, request_id=$REQUEST_ID"
-
-          run_id=""
-          for attempt in {1..60}; do
-            run_id="$(gh api \
-              --method GET \
-              "repos/${{ github.repository }}/actions/workflows/build-kde-wayland.yml/runs" \
-              -f event=workflow_dispatch \
-              -f branch=main \
-              -f per_page=20 \
-              --jq "first(.workflow_runs[] | select(.display_title | contains(\"$REQUEST_ID\")) | .id) // \"\"")"
-
-            if [ -n "$run_id" ]; then
-              break
-            fi
-
-            echo "Waiting for build-kde-wayland.yml run to appear ($attempt/60)..."
-            sleep 10
-          done
-
-          if [ -z "$run_id" ]; then
-            echo "Error: timed out while waiting for build-kde-wayland.yml run to appear" >&2
-            exit 1
-          fi
-
-          echo "Waiting for build-kde-wayland.yml run $run_id to complete..."
-          gh run watch "$run_id" --repo "${{ github.repository }}" --exit-status --interval 60
-
-          release_tag="anland-kde-packages"
-          release_body="$(gh api \
-            "repos/${{ github.repository }}/releases/tags/$release_tag" \
-            --jq '.body // ""')"
-          if ! printf '%s\n' "$release_body" | grep -Fq "Package request ID: $REQUEST_ID"; then
-            echo "Error: the fixed rolling Release does not record this KDE Wayland package request" >&2
-            exit 1
-          fi
-          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
-          echo "KDE Wayland rolling package Release: $release_tag"
-
-  # --------------------------------------------------------
-  # Phase 2: build (Build of regular Linux distribution RootFS)
-  # --------------------------------------------------------
-  build:
-    needs: [setup, build-wayland-packages]
-    if: ${{ needs.setup.outputs.templates != '[]' }}
-    runs-on: ubuntu-24.04-arm
-    strategy:
-      fail-fast: false
-      matrix:
-        template: ${{ fromJson(needs.setup.outputs.templates) }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-        with:
-          ref: ${{ github.ref_name }}
-
-      - name: Verify build options
-        run: |
-          if [ "${{ inputs.build_KDE }}" = "none" ] && [ "${{ inputs.build_KDE_plus }}" = "true" ]; then
-            echo "❌ Error: Cannot enable KDE auto-start when KDE desktop choice is 'none'"
-            echo "Please re-run the workflow, uncheck 'KDE desktop auto-start on boot' or select a KDE desktop"
-            exit 1
-          fi
-
-      - name: Select Wayland package source (${{ matrix.template }})
-        id: wayland_source
-        if: ${{ needs.setup.outputs.wayland_enabled == 'true' && github.repository != 'Goldzxcbug/Droidspaces-rootfs-KDE-builder' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TEMPLATE: ${{ matrix.template }}
-          OWN_REPOSITORY: ${{ github.repository }}
-          UPSTREAM_REPOSITORY: Goldzxcbug/Droidspaces-rootfs-KDE-builder
-          RELEASE_TAG: anland-kde-packages
-          MANIFEST_NAME: anland-kde-manifest
-        run: |
-          set -euo pipefail
-
-          case "$TEMPLATE" in
-            Debian-13-KDE) archive_target=debian13 ;;
-            Ubuntu-26-KDE) archive_target=ubuntu2604 ;;
-            Fedora-43-KDE) archive_target=fedora43 ;;
-            Fedora-44-KDE) archive_target=fedora44 ;;
-            Arch-KDE) archive_target=arch ;;
-            *)
-              echo "$TEMPLATE does not use Wayland prebuilt packages; keeping the upstream default."
-              exit 0
-              ;;
-          esac
-
-          work_dir="$(mktemp -d)"
-          trap 'rm -rf -- "$work_dir"' EXIT
-
-          # Read the build time recorded inside the distribution archive of a
-          # repository's rolling Release; return 1 when it cannot be read.
-          package_build_time() {
-            local repository="$1"
-            local slot_dir="$work_dir/$2"
-            local manifest_format manifest_tag archive_name build_time
-
-            mkdir -p "$slot_dir"
-            gh release download "$RELEASE_TAG" --repo "$repository" \
-              --pattern "$MANIFEST_NAME" --dir "$slot_dir" >/dev/null 2>&1 || return 1
-
-            manifest_format="$(awk -F= '$1 == "format" { print substr($0, index($0, "=") + 1) }' "$slot_dir/$MANIFEST_NAME")"
-            manifest_tag="$(awk -F= '$1 == "release_tag" { print substr($0, index($0, "=") + 1) }' "$slot_dir/$MANIFEST_NAME")"
-            [ "$manifest_format" = 1 ] && [ "$manifest_tag" = "$RELEASE_TAG" ] || return 1
-
-            archive_name="$(awk -F= -v key="$archive_target" '$1 == key { print substr($0, index($0, "=") + 1) }' "$slot_dir/$MANIFEST_NAME")"
-            case "$archive_name" in
-              ''|*[!A-Za-z0-9._+~-]*|*..*) return 1 ;;
-            esac
-
-            gh release download "$RELEASE_TAG" --repo "$repository" \
-              --pattern "$archive_name" --dir "$slot_dir" >/dev/null 2>&1 || return 1
-            build_time="$(tar -xOzf "$slot_dir/$archive_name" \
-              "anland-kde-packages/$archive_target/.anland-kde-build-info" 2>/dev/null \
-              | sed -n 's/^build_time=//p' | sed -n '1p')"
-            case "$build_time" in
-              [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) ;;
-              *) return 1 ;;
-            esac
-            printf '%s\n' "$build_time"
-          }
-
-          selected_repository="$UPSTREAM_REPOSITORY"
-          if ! own_time="$(package_build_time "$OWN_REPOSITORY" own)"; then
-            selected_reason="this repository has no usable ${archive_target} prebuilt package"
-          elif ! upstream_time="$(package_build_time "$UPSTREAM_REPOSITORY" upstream)"; then
-            selected_repository="$OWN_REPOSITORY"
-            selected_reason="the upstream ${archive_target} build time is unreadable, using this repository (${own_time})"
-          elif [[ "$own_time" < "$upstream_time" ]]; then
-            selected_reason="this repository (${own_time}) is older than upstream (${upstream_time})"
-          else
-            selected_repository="$OWN_REPOSITORY"
-            selected_reason="this repository (${own_time}) is not older than upstream (${upstream_time})"
-          fi
-
-          echo "repository=$selected_repository" >> "$GITHUB_OUTPUT"
-          echo "Wayland package source: ${selected_repository} (${selected_reason})"
-
-      - name: Build RootFS (${{ matrix.template }})
-        env:
-          ANLAND_KDE_RELEASE_REPOSITORY: ${{ steps.wayland_source.outputs.repository || 'Goldzxcbug/Droidspaces-rootfs-KDE-builder' }}
-          ANLAND_KDE_RELEASE_TAG: ${{ needs.build-wayland-packages.outputs.release_tag }}
-        run: |
-          chmod +x build_rootfs-native.sh
-          ./build_rootfs-native.sh \
-            -i "${{ matrix.template }}.Dockerfile" \
-            -v "${{ needs.setup.outputs.build_id }}" \
-            -K "${{ inputs.build_KDE }}" \
-            -L "${{ inputs.build_KDE_plus }}" \
-            -P "${{ needs.setup.outputs.pulseaudio_effective }}" \
-            -g "${{ inputs.enable_zh_tz }}" \
-            -a "${{ inputs.enable_binfmt }}" \
-            -b "${{ inputs.enable_yj }}" \
-            -c "${{ inputs.enable_mesa }}" \
-            -d "${{ inputs.enable_kfgj }}" \
-            -e "${{ inputs.enable_zip }}" \
-            -f "${{ inputs.enable_docker }}" \
-            -h "${{ inputs.enable_srf }}" \
-            -j "${{ inputs.enable_tmoe }}" \
-            -n "${{ inputs.nosnap }}" \
-            -S "${{ inputs.enable_systemd257 }}" \
-            -t "${{ inputs.enable_8gen2_wayland }}" \
-            -A "${{ needs.setup.outputs.wayland_enabled }}" \
-            -u "${{ inputs.custom_username }}"
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v6
-        with:
-          name: ${{ matrix.template }}-rootfs
-          path: "*.tar.xz"
-          retention-days: 1
-
-  # --------------------------------------------------------
-  # Phase 3: release (Summary and release)
-  # --------------------------------------------------------
-  release:
-    needs: [setup, build]
-    if: ${{ !cancelled() && needs.setup.result == 'success' && needs.build.result == 'success' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-        
-      - name: Download all artifacts
-        uses: actions/download-artifact@v7
-        with:
-          pattern: "*-rootfs"
-          merge-multiple: true
-          
-      - name: Organize resources
-        run: |
-          mkdir -p release_assets
-          mv *.tar.xz release_assets/
-          PA_CHOICE="${{ needs.setup.outputs.pulseaudio_effective }}"
-          CUSTOM_USERNAME="${{ github.event.inputs.custom_username }}"
-          build_KDE_plus="${{ github.event.inputs.build_KDE_plus }}"
-          if [ "$PA_CHOICE" != "none" ] && [ "$build_KDE_plus" = "false" ]; then
-            cp "scripts/on_aaudio_${PA_CHOICE}.sh" "release_assets/on_aaudio_${PA_CHOICE}.sh"
-            sed -i "s/USERNAME=\"Gold\"/USERNAME=\"${CUSTOM_USERNAME}\"/g" "release_assets/on_aaudio_${PA_CHOICE}.sh"
-          fi
-          
-      - name: Create unified Release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ needs.setup.outputs.build_id }}
-          name: "Droidspaces RootFS ${{ needs.setup.outputs.build_id }}"
-          files: "release_assets/*"
-          body: |
-            Droidspaces RootFS Automated Build
-            Build Time: ${{ needs.setup.outputs.build_date }}
-            Build Target (User Specified): ${{ github.event.inputs.build_target }}
-            Build ID: ${{ needs.setup.outputs.build_id }}
-
-            Build Options:
-            - **Custom Username**: ${{ github.event.inputs.custom_username }}
-            - **KDE Desktop**: ${{ github.event.inputs.build_KDE }}
-            - **KDE Auto-start**: ${{ github.event.inputs.build_KDE_plus }}
-            - **Wayland support**: ${{ needs.setup.outputs.wayland_enabled }}
-            - KDE Wayland package target: ${{ needs.setup.outputs.wayland_package_target || 'none' }}
-            - PulseAudio Audio Forwarding: ${{ needs.setup.outputs.pulseaudio_effective }}
-            - anland audio note: Wayland mode uses the built-in anland app audio, so PulseAudio is not needed
-            - nosnap: ${{ github.event.inputs.nosnap }}
-            - systemd 257 old-kernel compatibility: ${{ github.event.inputs.enable_systemd257 }}
-            - Use Chinese as Primary Language: ${{ github.event.inputs.enable_zh_tz }}
-            - Qualcomm Snapdragon GPU Support: ${{ github.event.inputs.enable_mesa }}
-            - Fix Snapdragon 8 Gen 2 Wayland display corruption: ${{ github.event.inputs.enable_8gen2_wayland }}
-            - Integrate TMOE: ${{ github.event.inputs.enable_tmoe }}
-            - Input Method fcitx5 Support: ${{ github.event.inputs.enable_srf }}
-            - Cross-architecture Support: ${{ github.event.inputs.enable_binfmt }}
-            - Container Hardware and Network Recognition Support: ${{ github.event.inputs.enable_yj }}
-            - Development Tools Integration: ${{ github.event.inputs.enable_kfgj }}
-            - Compression Tools Integration: ${{ github.event.inputs.enable_zip }}
-            - Docker Integration: ${{ github.event.inputs.enable_docker }}
-            
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          echo "Triggered build-kde-wayland.yml for target=$WAYLAND_PACKAGE_TARGET, reque

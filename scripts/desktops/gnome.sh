@@ -13,8 +13,8 @@ configure_environment() {
         XDG_CURRENT_DESKTOP=GNOME
         XDG_SESSION_DESKTOP=gnome
         GNOME_SHELL_SESSION_MODE=gnome
-        WAYLAND_DISPLAY=wayland-anland
-        GNOME_WAYLAND_DISPLAY=wayland-anland
+        WAYLAND_DISPLAY=wayland-0
+        GNOME_WAYLAND_DISPLAY=wayland-0
         QT_QPA_PLATFORM=wayland
         ANLAND=1
         ANLAND_SOCKET=/run/display.sock

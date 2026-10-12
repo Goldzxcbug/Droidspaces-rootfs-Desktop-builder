@@ -23,6 +23,9 @@ This directory contains installers used while building the RootFS, maintenance t
 | `install-anland-desktop.sh` | RootFS build environment | Dispatches a desktop slug to the KDE, GNOME, Niri, or Anland Next installer. |
 | `lib/anland-build.sh` | RootFS build host | Resolves the Anland package family, Release tag, and revision for native/QEMU builds. |
 | `install-usb-manager.sh` | Linux container | Installs Droidspaces USB Manager, distribution dependencies, launchers, and user permissions. |
+| `install-usb-storage-access.sh` | RootFS build environment | Configures USB mass-storage access: device nodes, media revalidation, the exFAT permission group, and the polkit rule. |
+| `droidspaces-usb-storage-fixup` | Linux container udev | Creates the missing nodes for USB block devices and revalidates late-attached media so udisks2/Dolphin can see the filesystem. |
+| `droidspaces-usb-storage-cleanup` | Linux container udev | Releases the container-side mount on unplug so the kernel block device is not left claimed. |
 | `systemd257.sh` | RootFS build environment | Installs a complete package-manager-owned systemd 257 family when required by an old Android kernel. |
 | `download-firmware` | Debian/Ubuntu container | Installs `linux-firmware` and decompresses its `.zst` firmware. |
 | `nosnap.sh` | Ubuntu RootFS build environment | Removes Snap, prevents reinstallation, and configures traditional deb sources. |
@@ -179,6 +182,36 @@ sudo ./scripts/install-usb-manager.sh --user "$USER"
 On a regular Arch system, the installer continues to install `systemd` and the remaining dependencies normally. When `/etc/droidspaces-systemd257` exists, a repeated installation preserves Pacman's `IgnorePkg` lock and no longer names `systemd` as an explicit install target; the PyQt5, ADB, NTFS, exFAT, and other USB Manager dependencies are still installed as needed.
 
 Hardware access must be enabled when importing the RootFS into Droidspaces, or `/sys/bus/usb` and `/sys/bus/scsi` will not be visible inside the container.
+
+## USB Mass-Storage Access Configurator
+
+`install-usb-storage-access.sh` runs automatically during the build and makes USB mass storage (USB sticks, camera internal storage, ...) actually usable by the desktop user.
+
+```bash
+sudo ./scripts/install-usb-storage-access.sh --user "$USER"
+```
+
+It installs and writes:
+
+- the `droidspaces-usb-storage-fixup` and `droidspaces-usb-storage-cleanup` runtime scripts;
+- `/etc/udev/rules.d/85-droidspaces-usb-storage.rules`: starts the helper on block-device `add` and releases the container-side mount on `remove`;
+- `/etc/systemd/system/droidspaces-usb-storage-fixup.service`;
+- `/etc/polkit-1/rules.d/49-droidspaces-udisks2.rules`: lets the local admin group mount removable media;
+- the `external_storage` group (gid 1077, matching Android's `AID_EXTERNAL_STORAGE`) with the `--user` account as a member.
+
+Three problems must be solved together before Dolphin works:
+
+1. The container's `/dev` only contains the nodes that already existed at container start. Block devices that appear later use a dynamic dev_t (USB disks, `loop16..46`, ...), and neither devtmpfs nor systemd-udevd creates a node for them, so `/dev/sdX` does not exist and nothing can open, probe or mount it.
+2. Devices such as cameras enumerate with no medium and attach the real storage only after the user confirms on the device; the kernel refreshes the reported capacity only when the device is opened (`sd_check_events() → revalidate_disk()`). With no node, nobody ever opens it, the capacity stays 0 and udev never sees a filesystem.
+3. The Android GKI exFAT driver ignores `uid=`/`gid=`/`umask=` and hard-codes `gid=1077` (`AID_EXTERNAL_STORAGE`) with `fmask/dmask=0007`, so a regular user must be in that gid to read exFAT media (the same class of problem that `ntfsusb` gid 1023 solves for NTFS).
+
+`droidspaces-usb-storage-fixup` only `mknod`s nodes and opens the device to read its capacity; it **never writes to any filesystem**, and it polls with a backoff capped at 10 minutes. The udev rule lets only `add` start the helper (the helper re-triggers udev with `change` itself, which would otherwise loop) and releases the container-side mount on `remove`.
+
+Only `Fedora-44.Dockerfile` wires this in so far (three `COPY` lines, one `RUN` line, plus the build-time cleanup entry); other distributions can adopt it the same way when needed.
+
+> A log-out/log-in (or container restart) is required after installation so the new group reaches the desktop processes.
+>
+> **⚠️ Never accept Android's "format" prompt.** The host Android `vold` runs `fsck` before mounting, and fsck needs exclusive access to the block device — as long as any kernel exFAT mount exists on the container side, vold's fsck fails, the volume is marked `unmountable`, and Android posts a notification that leads to formatting. The rules therefore arrange for **vold to mount first and the container to mount afterwards**, and release the block device on unplug. If that notification still appears, dismiss it.
 
 ## systemd 257 Compatibility Script
 

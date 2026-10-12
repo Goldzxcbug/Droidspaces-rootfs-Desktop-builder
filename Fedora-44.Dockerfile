@@ -24,6 +24,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # 通用 Droidspaces USB Manager 安装器
 COPY scripts/install-usb-manager.sh /usr/local/sbin/install-droidspaces-usb-manager
+COPY scripts/install-usb-storage-access.sh /usr/local/sbin/install-droidspaces-usb-storage
+COPY scripts/droidspaces-usb-storage-fixup /usr/local/sbin/droidspaces-usb-storage-fixup
+COPY scripts/droidspaces-usb-storage-cleanup /usr/local/sbin/droidspaces-usb-storage-cleanup
 COPY scripts/systemd257.sh /usr/local/sbin/systemd257
 COPY scripts/tui/install-anland-kde.sh /usr/local/sbin/install-anland-kde
 COPY scripts/tui/install-anland-gnome.sh /usr/local/sbin/install-anland-gnome
@@ -120,6 +123,8 @@ RUN if [ "$ENABLE_zh_tz_ARG" = "true" ]; then \
 
 # 为所有 Fedora RootFS 安装 Droidspaces USB Manager
 RUN /usr/local/sbin/install-droidspaces-usb-manager --user "${USERNAME}"
+# 配置 USB 大容量存储访问：补齐 /dev 节点、重新校验介质、exFAT 权限与 polkit 放行
+RUN /usr/local/sbin/install-droidspaces-usb-storage --user "${USERNAME}"
 
 # 初始化环境变量文件；桌面专属变量由对应 profile 管理。
 RUN : > /etc/environment
@@ -383,6 +388,7 @@ RUN rm -f \
         /usr/local/sbin/install-desktop \
         /usr/local/sbin/install-anland-desktop \
         /usr/local/sbin/install-droidspaces-usb-manager \
+        /usr/local/sbin/install-droidspaces-usb-storage \
         /usr/local/sbin/systemd257 \
         /usr/local/sbin/nosnap && \
     rm -rf /usr/local/lib/droidspaces/desktops && \

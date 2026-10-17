@@ -63,11 +63,11 @@ The output name resembles `Ubuntu-26-kde-Wayland-Droidspaces-rootfs-aarch64-loca
 
 ## Limitations
 
-- Anland Wayland is supported on Debian 13, Ubuntu 26, Fedora 43/44, and Arch; Ubuntu 24/25 use X11.
-- GNOME is available on Debian 13, Ubuntu 26, and Arch Linux ARM with Anland Wayland.
+- Anland Wayland is supported on Debian 13, Ubuntu 26, Fedora 43/44, and Arch; Arch KDE is Wayland-only, while Ubuntu 24/25 use X11.
+- GNOME is available on Debian 13, Ubuntu 26, Fedora 43/44, and Arch Linux ARM with Anland Wayland.
 - KDE Mobile and Anland Next are available only on supported Wayland targets.
-- Niri is available only in Arch Linux ARM Anland Wayland builds.
+- Niri, Hyprland, Mango, and Denial are available on Debian 13, Ubuntu 26, Fedora 43/44, and Arch Linux ARM with Anland Wayland.
 - Fedora may need hardware access on some devices. Debian/Ubuntu may lag when `noseccomp` is disabled or the host kernel lacks `USER_NS`.
 - This project's QEMU/binfmt cross-architecture path is not currently recommended for Arch.
 
-Anland KDE/GNOME packages are maintained in the separate [`droidspaces-package`](https://github.com/Goldzxcbug/droidspaces-package) repository. See the [project home](../../README_english.md#acknowledgements) for acknowledgements.
+Anland desktop packages are maintained in the separate [`droidspaces-package`](https://github.com/Goldzxcbug/droidspaces-package) repository. See the [project home](../../README_english.md#acknowledgements) for acknowledgements.

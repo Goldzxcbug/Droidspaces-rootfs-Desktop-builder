@@ -8,12 +8,15 @@ When `desktop_autostart` is enabled, the RootFS installs `desktop-session.servic
 
 | Desktop and backend | Manual command |
 | --- | --- |
-| KDE + X11 | `DISPLAY=:5 startplasma-x11` |
+| KDE + X11 (unsupported on Arch) | `DISPLAY=:5 startplasma-x11` |
 | KDE + Anland Wayland | `startplasma-wayland` |
 | KDE Mobile + Anland Wayland | `startplasmamobile` |
 | GNOME + Anland Wayland | `gnome-session --session=gnome` |
 | Anland Next | `/usr/bin/anland-session` |
 | Niri | `/usr/bin/niri-anland` |
+| Hyprland | `/usr/bin/hyprland-anland` |
+| Mango | `/usr/bin/mango-anland` |
+| Denial | `/usr/bin/denial-anland` |
 
 After an unexpected exit, systemd retries after 2 seconds. More than 5 failures within 60 seconds pauses retries. A normal exit does not restart the session.
 
@@ -27,9 +30,9 @@ startplasma-x11
 
 ### Anland Wayland host setup
 
-Anland Wayland supports Debian 13, Ubuntu 26, Fedora 43/44, and Arch. KDE uses patched KWin/Xwayland; GNOME uses patched Mutter. GNOME packages for Debian, Ubuntu, and Arch are published by [`droidspaces-package`](https://github.com/Goldzxcbug/droidspaces-package) and installed from its Release during RootFS creation. The Arch Niri session uses `niri-anland` and the patched Xwayland from the same Release, with `xdg-desktop-portal-gtk` and Alacritty for portals and a terminal.
+Anland Wayland supports Debian 13, Ubuntu 26, Fedora 43/44, and Arch. Arch KDE uses Anland Wayland only. KDE uses patched KWin/Xwayland; GNOME uses patched Mutter and installs a full desktop with common applications. Niri, Hyprland, Mango, and Denial include a lightweight session, terminal, XDG portal, audio, and fonts for users to extend. Their ARM64 packages are published by [`droidspaces-package`](https://github.com/Goldzxcbug/droidspaces-package) and installed from the matching Release during RootFS creation.
 
-The Niri profile writes the session and Anland/Mesa environment to `/etc/environment`, like the other desktop profiles. The shared desktop launcher runs `/usr/bin/niri-anland` directly without `--session`.
+The lightweight compositor profile writes the session and Anland/Mesa environment to `/etc/environment`, like the other desktop profiles. The shared desktop launcher runs each packaged compositor command directly without a session wrapper.
 
 Prepare the Android device:
 
@@ -54,12 +57,12 @@ The build fetches matching packages automatically. To install them separately in
 sudo ./scripts/tui/install-anland-kde.sh
 ```
 
-The GNOME installer runs on Debian 13, Ubuntu 26, and Arch Linux ARM:
+The GNOME installer runs on Debian 13, Ubuntu 26, Fedora 43/44, and Arch Linux ARM:
 
 ```bash
 sudo ./scripts/tui/install-anland-gnome.sh
 ```
 
-The in-container installer supports Arch pacman packages and reads the Arch target from the `anland-gnome-packages` Release manifest.
+The in-container installer supports Debian, Ubuntu, Fedora, and Arch packages and reads the matching target from the `anland-gnome-packages` Release manifest.
 
 See the [script guide](../../scripts/README_english.md#anland-kde-installer) for installer options, download sources, and verification.

@@ -17,10 +17,11 @@
 | `tui/install-hangover-wine.sh` | ARM64 Linux 容器 | 安装当前发行版对应的 Hangover Wine Release 包。 |
 | `tui/install-winefonts.sh` | Linux 容器 | 安装 Wine 字体包并刷新 fontconfig 字体缓存。 |
 | `tui/install-anland-kde.sh` | ARM64 Linux 容器 | 安装 Anland patched KWin/Xwayland Release 包，并锁定相关包。 |
-| `tui/install-anland-gnome.sh` | ARM64 Debian/Ubuntu/Arch 容器 | 安装 Anland patched Mutter Release 包，并锁定相关包。 |
+| `tui/install-anland-gnome.sh` | ARM64 Debian/Ubuntu/Fedora/Arch 容器 | 安装 Anland patched Mutter Release 包，并锁定相关包。 |
 | `tui/install-anland-next.sh` | ARM64 Debian/Ubuntu/Fedora/Arch 容器 | 安装 Anland Next session 包（mini-wm + patched Xwayland + patched bubblewrap）。 |
-| `tui/install-anland-niri.sh` | ARM64 Arch Linux ARM 容器 | 安装 Anland Niri 与共享的 patched Xwayland 包。 |
-| `install-anland-desktop.sh` | RootFS 构建环境 | 根据桌面 slug 分发到 KDE、GNOME、Niri 或 Anland Next 安装器。 |
+| `tui/install-anland-niri.sh` | ARM64 Debian 13、Ubuntu 26、Fedora 43/44、Arch 容器 | 安装 Anland Niri 与共享的 patched Xwayland 包。 |
+| `tui/install-anland-hyprland.sh`、`install-anland-mango.sh`、`install-anland-denial.sh` | ARM64 Debian 13、Ubuntu 26、Fedora 43/44、Arch 容器 | 安装对应 compositor 与 patched Xwayland 包。 |
+| `install-anland-desktop.sh` | RootFS 构建环境 | 根据桌面 slug 分发到 KDE、GNOME、Niri、Hyprland、Mango、Denial 或 Anland Next 安装器。 |
 | `lib/anland-build.sh` | RootFS 构建宿主 | 为 native/QEMU 构建统一解析 Anland 包族、Release tag 和 revision。 |
 | `install-usb-manager.sh` | Linux 容器 | 安装 Droidspaces USB Manager、发行版依赖、菜单入口和用户权限。 |
 | `install-usb-storage-access.sh` | RootFS 构建环境 | 配置 USB 大容量存储访问：补齐 `/dev` 节点、重新校验介质、exFAT 权限组与 polkit 放行。 |
@@ -50,7 +51,7 @@ ds-tui
 ./scripts/tui/droidspaces-tui.sh
 ```
 
-主菜单包含 Mesa 与 MediaCodec VA-API、Hangover Wine、Wine 字体及当前 RootFS 对应的桌面/会话更新项，只显示黄色“检测到更新”、绿色“当前已是最新版本”或红色“未安装”。桌面/会话项严格解析 `/etc/droidspaces-desktop.conf`：KDE/KDE mobile 只显示 Anland KDE，GNOME 只显示 Anland GNOME，Niri 只显示 Anland Niri，Anland Next 只显示其 session；`none` 或未知桌面进入选择页，可选择 Anland KDE、GNOME、Niri 或 Next session。旧 RootFS 缺少配置文件时才按已安装的 Anland 组件兜底，无法判断时同样进入选择页。选择组件后进入版本详情，可更新、安装或卸载。版本查询在后台并发运行，动态 Braille 符号表示正在查询，单项 10 秒内未取得有效版本时显示“超时”，且查询不会阻塞菜单输入。版本检测在启动 TUI 时运行，进入菜单、返回或输入无效内容不会重新检测；安装或卸载实际开始执行后，返回主菜单时会自动刷新一次。输入内容可见并支持退格，Loading 使用原地重绘，避免反复清屏闪烁。卸载 Mesa、KWin、Mutter 或 Niri 补丁会恢复发行版官方包，Hangover Wine 和 Wine 字体则移除自身内容。中文环境默认使用 CNB，其他语言环境默认使用 GitHub；下载源也可以统一改为自动测速、GitHub、`gh-proxy.com` 或 CNB。明确选择 CNB 时，TUI 不查询 GitHub API，安装器从同一 CNB Release 的同步清单取得附件名、SHA-256 和大小；旧发布未提供摘要时会明确提示并保留归档结构与包元数据校验。
+主菜单包含 Mesa 与 MediaCodec VA-API、Hangover Wine、Wine 字体及当前 RootFS 对应的桌面/会话更新项，只显示黄色“检测到更新”、绿色“当前已是最新版本”或红色“未安装”。桌面/会话项严格解析 `/etc/droidspaces-desktop.conf`：KDE/KDE mobile 只显示 Anland KDE，GNOME 只显示 Anland GNOME，Niri/Hyprland/Mango/Denial 显示匹配的 compositor，Anland Next 只显示其 session；`none` 或未知桌面进入组件选择页。旧 RootFS 缺少配置文件时才按已安装的 Anland 组件兜底，无法判断时同样进入选择页。选择组件后进入版本详情，可更新、安装或卸载。版本查询在后台并发运行，动态 Braille 符号表示正在查询，单项 10 秒内未取得有效版本时显示“超时”，且查询不会阻塞菜单输入。版本检测在启动 TUI 时运行，进入菜单、返回或输入无效内容不会重新检测；安装或卸载实际开始执行后，返回主菜单时会自动刷新一次。输入内容可见并支持退格，Loading 使用原地重绘，避免反复清屏闪烁。卸载 Mesa、KWin、Mutter 或 compositor 补丁会恢复发行版官方包，Hangover Wine 和 Wine 字体则移除自身内容。中文环境默认使用 CNB，其他语言环境默认使用 GitHub；下载源也可以统一改为自动测速、GitHub、`gh-proxy.com` 或 CNB。明确选择 CNB 时，TUI 不查询 GitHub API，安装器从同一 CNB Release 的同步清单取得附件名、SHA-256 和大小；旧发布未提供摘要时会明确提示并保留归档结构与包元数据校验。
 
 主菜单的 `C` 进入缓存管理。可以只清理 Hangover Release 清单缓存，解决滚动 Release 更新后旧清单无法续传的问题；也可以清空 `/var/cache/hangover-wine` 下的全部下载缓存。两项操作都需要确认，清空全部缓存会导致下次安装重新下载软件包。
 
@@ -163,7 +164,7 @@ sudo ANLAND_NEXT_RELEASE_REPOSITORY=owner/repository \
 
 ## Anland Niri 安装器
 
-`install-anland-niri.sh` 从固定滚动 Release `anland-niri-packages` 读取 `anland-niri-manifest`，为 Arch Linux ARM64 安装 `niri-anland` 和配套的 patched `xorg-xwayland`。RootFS profile 还会安装 `xdg-desktop-portal-gtk`、Alacritty 终端和常用 Niri 工具。Niri 与 Anland KDE 共用 patched Xwayland；安装器会阻止冲突安装，并在卸载时保留 KDE 使用的包。TUI 安装会在 `DESKTOP=none` 时切换到 Niri、设置 `DISPLAY_BACKEND=anland-wayland`，并调用 Niri profile 配置会话与 Anland/Mesa 环境；已有其他桌面配置会保留。卸载当前 Niri 配置会恢复 `none/x11`。
+Niri、Hyprland、Mango 和 Denial 安装器从各自固定滚动 Release 安装 compositor 与 patched `xorg-xwayland`，支持 Debian 13、Ubuntu 26、Fedora 43/44 和 Arch ARM64。轻量 RootFS profile 提供终端、XDG portal、音频和字体等基础服务；Niri 在 Arch 上还包含常用桌面工具。各 compositor 共用 patched Xwayland；安装器会阻止互相覆盖，并在卸载时保留其他组件使用的包。
 
 ```bash
 sudo ./scripts/tui/install-anland-niri.sh

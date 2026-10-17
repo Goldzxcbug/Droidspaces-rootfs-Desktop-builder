@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-readonly TUI_VERSION="1.4"
+readonly TUI_VERSION="1.5"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_PATH="$SCRIPT_DIR/$(basename -- "${BASH_SOURCE[0]}")"
 readonly DESKTOP_CONFIG="${DROIDSPACES_DESKTOP_CONFIG:-/etc/droidspaces-desktop.conf}"
@@ -9,9 +9,10 @@ readonly HANGOVER_CACHE_DIR="/var/cache/hangover-wine"
 readonly HANGOVER_MANIFEST_NAME="hangover-wine-manifest"
 readonly COMPONENT_STATE_DIR="${DROIDSPACES_COMPONENT_STATE_DIR:-/var/lib/droidspaces-tui/components}"
 readonly COMPONENT_RELEASE_REPOSITORY="${DROIDSPACES_COMPONENT_REPOSITORY:-Goldzxcbug/droidspaces-package}"
-readonly COMPONENT_API_URL="${DROIDSPACES_COMPONENT_API_URL:-https://api.github.com}"
+readonly COMPONENT_GITHUB_DOWNLOAD_BASE="${DROIDSPACES_COMPONENT_GITHUB_BASE:-https://github.com/$COMPONENT_RELEASE_REPOSITORY/releases/download}"
+readonly COMPONENT_PROXY_DOWNLOAD_BASE="${DROIDSPACES_COMPONENT_PROXY_BASE:-https://gh-proxy.com/https://github.com/$COMPONENT_RELEASE_REPOSITORY/releases/download}"
 readonly COMPONENT_CNB_DOWNLOAD_BASE="${DROIDSPACES_COMPONENT_CNB_BASE:-https://cnb.cool/goldzxcbug/droidspaces-package/-/releases/download}"
-readonly COMPONENT_CNB_MANIFEST_MAX_BYTES=$((1024 * 1024))
+readonly COMPONENT_MANIFEST_MAX_BYTES=$((1024 * 1024))
 readonly COMPONENT_VERSION_TIMEOUT=10
 readonly INSTALLED_TUI_PATH="/usr/local/bin/droidspaces-tui"
 readonly TUI_RELEASE_REPOSITORY="${DROIDSPACES_TUI_REPOSITORY:-Goldzxcbug/droidspaces-package}"
@@ -49,7 +50,7 @@ MENU_ESCAPE_SEQUENCE=""
 MENU_TTY_ECHO_DISABLED=false
 DYNAMIC_MENU_DRAWN=false
 
-readonly -a COMPONENT_NAMES=(mesa hangover fonts kde gnome niri anland-next)
+readonly -a COMPONENT_NAMES=(mesa hangover fonts kde gnome niri hyprland mango denial anland-next)
 readonly -a SPINNER_FRAMES=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
 declare -A COMPONENT_CURRENT_VERSIONS=()
 declare -A COMPONENT_UPSTREAM_VERSIONS=()
@@ -201,14 +202,19 @@ set_desktop_component() {
             DESKTOP_COMPONENT_LABEL="Anland KDE (KWin/Xwayland)"
             DESKTOP_COMPONENT_MODE="direct"
             ;;
-        gnome)
-            DESKTOP_COMPONENT="gnome"
-            DESKTOP_COMPONENT_LABEL="Anland GNOME (Mutter/Xwayland)"
-            DESKTOP_COMPONENT_MODE="direct"
-            ;;
         niri)
             DESKTOP_COMPONENT="niri"
             DESKTOP_COMPONENT_LABEL="Anland Niri (Niri/Xwayland)"
+            DESKTOP_COMPONENT_MODE="direct"
+            ;;
+        hyprland|mango|denial)
+            DESKTOP_COMPONENT="$DESKTOP_PROFILE"
+            DESKTOP_COMPONENT_LABEL="Anland ${DESKTOP_PROFILE^}"
+            DESKTOP_COMPONENT_MODE="direct"
+            ;;
+        gnome)
+            DESKTOP_COMPONENT="gnome"
+            DESKTOP_COMPONENT_LABEL="Anland GNOME (Mutter/Xwayland)"
             DESKTOP_COMPONENT_MODE="direct"
             ;;
         anland-next)
@@ -249,6 +255,12 @@ detect_desktop_component() {
         set_desktop_component niri
     elif managed_component_installed gnome; then
         set_desktop_component gnome
+    elif managed_component_installed hyprland; then
+        set_desktop_component hyprland
+    elif managed_component_installed mango; then
+        set_desktop_component mango
+    elif managed_component_installed denial; then
+        set_desktop_component denial
     elif managed_component_installed anland-next; then
         set_desktop_component anland-next
     else
@@ -478,6 +490,7 @@ installer_names() {
         kde) printf '%s\n%s\n' "install-anland-kde.sh" "install-anland-kde" ;;
         gnome) printf '%s\n%s\n' "install-anland-gnome.sh" "install-anland-gnome" ;;
         niri) printf '%s\n%s\n' "install-anland-niri.sh" "install-anland-niri" ;;
+        hyprland|mango|denial) printf '%s\n%s\n' "install-anland-$1.sh" "install-anland-$1" ;;
         anland-next) printf '%s\n%s\n' "install-anland-next.sh" "install-anland-next" ;;
         *) return 1 ;;
     esac
@@ -541,21 +554,15 @@ component_supported() {
                 *) return 1 ;;
             esac
             ;;
-        gnome)
+        niri|gnome|hyprland|mango|denial)
             case "$SYSTEM_ID:$SYSTEM_VERSION" in
-                debian:13*|ubuntu:26.04*|arch:*|archarm:*|archlinux:*) return 0 ;;
-                *) return 1 ;;
-            esac
-            ;;
-        niri)
-            case "$SYSTEM_ID:$SYSTEM_VERSION" in
-                arch:*|archarm:*|archlinux:*) return 0 ;;
+                debian:13*|ubuntu:26.04*|fedora:43*|fedora:44*|arch:*|archarm:*|archlinux:*) return 0 ;;
                 *) return 1 ;;
             esac
             ;;
         anland-next)
             case "$SYSTEM_ID:$SYSTEM_VERSION" in
-                arch:*|archarm:*|debian:13*|ubuntu:26.04*|fedora:43*|fedora:44*) return 0 ;;
+                arch:*|archarm:*|archlinux:*|debian:13*|ubuntu:26.04*|fedora:43*|fedora:44*) return 0 ;;
                 *) return 1 ;;
             esac
             ;;
@@ -641,6 +648,15 @@ detected_component_package_version() {
         niri)
             version="$(installed_package_version niri-anland)" || true
             ;;
+        hyprland)
+            version="$(installed_package_version hyprland-anland hyprland)" || true
+            ;;
+        mango)
+            version="$(installed_package_version mango-anland)" || true
+            ;;
+        denial)
+            version="$(installed_package_version denial)" || true
+            ;;
         gnome)
             version="$(installed_package_version mutter-common mutter)" || true
             ;;
@@ -668,6 +684,8 @@ detect_current_component_version() {
 
 managed_component_installed() {
     local component="$1"
+    # Version/hold records can outlive packages removed outside the installer.
+    detected_component_package_version "$component" >/dev/null 2>&1 || return 1
     stored_component_version "$component" >/dev/null 2>&1 && return 0
     case "$component" in
         mesa)
@@ -680,11 +698,9 @@ managed_component_installed() {
                 *) return 1 ;;
             esac
             ;;
-        hangover)
-            detected_component_package_version hangover >/dev/null 2>&1
-            ;;
-        fonts)
-            [[ -d /usr/local/share/fonts/winefonts ]]
+        hangover|fonts|niri|mango|denial|anland-next)
+            # These components use dedicated package names (or a managed font directory).
+            return 0
             ;;
         kde)
             case "$SYSTEM_ID" in
@@ -697,9 +713,18 @@ managed_component_installed() {
                 *) return 1 ;;
             esac
             ;;
+        hyprland)
+            installed_package_version hyprland-anland >/dev/null 2>&1 && return 0
+            # Debian/Ubuntu replace the distribution's hyprland package.
+            case "$SYSTEM_ID" in
+                debian|ubuntu) [[ -s /var/lib/anland-hyprland/apt-holds ]] ;;
+                *) return 1 ;;
+            esac
+            ;;
         gnome)
             case "$SYSTEM_ID" in
                 debian|ubuntu) [[ -s /var/lib/anland-gnome/apt-holds ]] ;;
+                fedora) grep -Fqx '# BEGIN anland-gnome package holds' /etc/dnf/dnf.conf 2>/dev/null ;;
                 arch|archarm|archlinux)
                     [[ -s /var/lib/anland-gnome/pacman-packages ]] || \
                         grep -Eq '^[[:space:]]*IgnorePkg[[:space:]]*=.*(^|[[:space:]])mutter([[:space:]]|$)' \
@@ -707,12 +732,6 @@ managed_component_installed() {
                     ;;
                 *) return 1 ;;
             esac
-            ;;
-        niri)
-            detected_component_package_version niri >/dev/null 2>&1
-            ;;
-        anland-next)
-            detected_component_package_version anland-next >/dev/null 2>&1
             ;;
         *) return 1 ;;
     esac
@@ -734,7 +753,8 @@ component_versions_match() {
             current="${current#*:}"
             [[ "$current" == "$upstream"-* ]]
             ;;
-        niri)
+        niri|hyprland|mango|denial)
+            current="${current#*:}"
             [[ "$current" == "$upstream" || "$current" == "$upstream"-* || "$current" == "$upstream"+* ]]
             ;;
         anland-next)
@@ -776,14 +796,6 @@ component_release_parts() {
                 *) return 1 ;;
             esac
             ;;
-        niri)
-            is_arm64 || return 1
-            tag="anland-niri-packages"
-            case "$SYSTEM_ID:$SYSTEM_VERSION" in
-                arch:*|archarm:*|archlinux:*) prefix="anland-niri-arch-"; suffix="-aarch64.tar.gz" ;;
-                *) return 1 ;;
-            esac
-            ;;
         fonts)
             tag="winefonts"
             prefix="winefonts-"
@@ -800,12 +812,26 @@ component_release_parts() {
                 *) return 1 ;;
             esac
             ;;
+        niri|hyprland|mango|denial)
+            is_arm64 || return 1
+            tag="anland-$component-packages"
+            case "$SYSTEM_ID:$SYSTEM_VERSION" in
+                arch:*|archarm:*|archlinux:*) prefix="anland-$component-arch-"; suffix="-aarch64.tar.gz" ;;
+                debian:13*) prefix="anland-$component-debian13-"; suffix="-arm64.tar.gz" ;;
+                ubuntu:26.04*) prefix="anland-$component-ubuntu2604-"; suffix="-arm64.tar.gz" ;;
+                fedora:43*) prefix="anland-$component-fedora43-"; suffix="-aarch64.tar.gz" ;;
+                fedora:44*) prefix="anland-$component-fedora44-"; suffix="-aarch64.tar.gz" ;;
+                *) return 1 ;;
+            esac
+            ;;
         gnome)
             tag="anland-gnome-packages"
             case "$SYSTEM_ID:$SYSTEM_VERSION" in
                 arch:*|archarm:*|archlinux:*) prefix="anland-gnome-arch-mutter-"; suffix="-aarch64.tar.gz" ;;
                 debian:13*) prefix="anland-gnome-debian13-mutter-"; suffix="-arm64.tar.gz" ;;
                 ubuntu:26.04*) prefix="anland-gnome-ubuntu2604-mutter-"; suffix="-arm64.tar.gz" ;;
+                fedora:43*) prefix="anland-gnome-fedora43-mutter-"; suffix="-aarch64.tar.gz" ;;
+                fedora:44*) prefix="anland-gnome-fedora44-mutter-"; suffix="-aarch64.tar.gz" ;;
                 *) return 1 ;;
             esac
             ;;
@@ -847,65 +873,13 @@ component_release_manifest_name() {
         fonts) printf '%s' 'winefonts-manifest' ;;
         kde) printf '%s' 'anland-kde-manifest' ;;
         gnome) printf '%s' 'anland-gnome-manifest' ;;
-        niri) printf '%s' 'anland-niri-manifest' ;;
+        niri|hyprland|mango|denial) printf 'anland-%s-manifest' "$1" ;;
         anland-next) printf '%s' 'anland-session-manifest' ;;
         *) return 1 ;;
     esac
 }
 
-release_asset_names() {
-    local metadata="$1" expected_tag="$2"
-    if command -v jq >/dev/null 2>&1; then
-        jq -er --arg tag "$expected_tag" '
-            select(.tag_name == $tag and .draft == false)
-            | .assets[]?.name
-            | select(type == "string")
-        ' "$metadata"
-    elif command -v python3 >/dev/null 2>&1; then
-        python3 - "$metadata" "$expected_tag" <<'PY'
-import json
-import sys
-
-path, expected_tag = sys.argv[1:]
-with open(path, "r", encoding="utf-8") as stream:
-    release = json.load(stream)
-if release.get("tag_name") != expected_tag or release.get("draft") is not False:
-    raise SystemExit(1)
-for asset in release.get("assets", []):
-    name = asset.get("name")
-    if isinstance(name, str):
-        print(name)
-PY
-    else
-        return 1
-    fi
-}
-
-parse_component_release_version() {
-    local component="$1" metadata="$2"
-    local parts tag prefix suffix name version selected="" count=0
-    parts="$(component_release_parts "$component")" || return 1
-    tag="${parts%%$'\n'*}"
-    parts="${parts#*$'\n'}"
-    prefix="${parts%%$'\n'*}"
-    suffix="${parts#*$'\n'}"
-
-    while IFS= read -r name; do
-        case "$name" in
-            "$prefix"*"$suffix")
-                version="${name#"$prefix"}"
-                version="${version%"$suffix"}"
-                valid_component_version "$version" || continue
-                selected="$version"
-                ((count += 1))
-                ;;
-        esac
-    done < <(release_asset_names "$metadata" "$tag")
-    ((count == 1)) || return 1
-    printf '%s' "$selected"
-}
-
-cnb_manifest_asset_names() {
+component_manifest_asset_names() {
     local manifest="$1"
 
     awk -F '\t' '
@@ -925,7 +899,7 @@ cnb_manifest_asset_names() {
     ' "$manifest"
 }
 
-validate_cnb_component_manifest() {
+validate_component_manifest() {
     local manifest="$1" expected_tag="$2"
 
     awk -F '=' -v expected_tag="$expected_tag" '
@@ -949,7 +923,7 @@ validate_cnb_component_manifest() {
     ' "$manifest"
 }
 
-parse_component_cnb_manifest_version() {
+parse_component_manifest_version() {
     local component="$1" manifest="$2"
     local parts prefix suffix name version selected="" count=0
 
@@ -968,62 +942,32 @@ parse_component_cnb_manifest_version() {
                 ((count += 1))
                 ;;
         esac
-    done < <(cnb_manifest_asset_names "$manifest")
+    done < <(component_manifest_asset_names "$manifest")
     ((count == 1)) || return 1
     printf '%s' "$selected"
 }
 
 fetch_component_release_version() {
     local component="$1" result_file="$2"
-    local parts tag metadata version temporary_result curl_pid curl_status
-    command -v curl >/dev/null 2>&1 || return 1
-    parts="$(component_release_parts "$component")" || return 1
-    tag="${parts%%$'\n'*}"
-    metadata="$COMPONENT_VERSION_WORK_DIR/$component.release.json"
-    temporary_result="$result_file.tmp.$BASHPID"
-    local -a headers=(
-        --header 'Accept: application/vnd.github+json'
-        --header 'X-GitHub-Api-Version: 2022-11-28'
-        --header 'User-Agent: droidspaces-tui-components'
-    )
-    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-        headers+=(--header "Authorization: Bearer $GITHUB_TOKEN")
-    fi
-    curl --fail --silent --show-error --location \
-        --connect-timeout 3 --max-time 9 "${headers[@]}" \
-        "$COMPONENT_API_URL/repos/$COMPONENT_RELEASE_REPOSITORY/releases/tags/$tag" \
-        --output "$metadata" >/dev/null 2>&1 &
-    curl_pid=$!
-    trap 'kill "$curl_pid" 2>/dev/null || true; wait "$curl_pid" 2>/dev/null || true; exit 1' \
-        HUP INT TERM
-    if wait "$curl_pid"; then
-        curl_status=0
-    else
-        curl_status=$?
-    fi
-    trap - HUP INT TERM
-    ((curl_status == 0)) || return 1
-    version="$(parse_component_release_version "$component" "$metadata")" || return 1
-    printf '%s\n' "$version" > "$temporary_result" || return 1
-    mv -f -- "$temporary_result" "$result_file"
-}
-
-fetch_component_cnb_release_version() {
-    local component="$1" result_file="$2"
-    local parts tag manifest_name manifest manifest_size version temporary_result
+    local parts tag base_url manifest_name manifest manifest_size version temporary_result
     local curl_pid curl_status
 
     command -v curl >/dev/null 2>&1 || return 1
     parts="$(component_release_parts "$component")" || return 1
     tag="${parts%%$'\n'*}"
     manifest_name="$(component_release_manifest_name "$component")" || return 1
-    manifest="$COMPONENT_VERSION_WORK_DIR/$component.cnb-manifest"
+    manifest="$COMPONENT_VERSION_WORK_DIR/$component.manifest"
     temporary_result="$result_file.tmp.$BASHPID"
+    case "$DOWNLOAD_SOURCE" in
+        2) base_url="$COMPONENT_PROXY_DOWNLOAD_BASE" ;;
+        3) base_url="$COMPONENT_CNB_DOWNLOAD_BASE" ;;
+        *) base_url="$COMPONENT_GITHUB_DOWNLOAD_BASE" ;;
+    esac
 
     curl --fail --silent --show-error --location \
         --connect-timeout 3 --max-time 9 \
         --header 'User-Agent: droidspaces-tui-components' \
-        "$COMPONENT_CNB_DOWNLOAD_BASE/$tag/$manifest_name" \
+        "${base_url%/}/$tag/$manifest_name" \
         --output "$manifest" >/dev/null 2>&1 &
     curl_pid=$!
     trap 'kill "$curl_pid" 2>/dev/null || true; wait "$curl_pid" 2>/dev/null || true; exit 1' \
@@ -1038,9 +982,9 @@ fetch_component_cnb_release_version() {
 
     manifest_size="$(stat -c '%s' "$manifest")" || return 1
     [[ "$manifest_size" =~ ^[0-9]+$ && "$manifest_size" -gt 0 && \
-       "$manifest_size" -le "$COMPONENT_CNB_MANIFEST_MAX_BYTES" ]] || return 1
-    validate_cnb_component_manifest "$manifest" "$tag" || return 1
-    version="$(parse_component_cnb_manifest_version "$component" "$manifest")" || return 1
+       "$manifest_size" -le "$COMPONENT_MANIFEST_MAX_BYTES" ]] || return 1
+    validate_component_manifest "$manifest" "$tag" || return 1
+    version="$(parse_component_manifest_version "$component" "$manifest")" || return 1
     printf '%s\n' "$version" > "$temporary_result" || return 1
     mv -f -- "$temporary_result" "$result_file"
 }
@@ -1056,7 +1000,7 @@ component_versions_pending() {
 component_visible() {
     case "$1" in
         mesa|hangover|fonts) return 0 ;;
-        kde|gnome|niri|anland-next)
+        kde|gnome|niri|hyprland|mango|denial|anland-next)
             [[ "$DESKTOP_COMPONENT_MODE" == choose || "$DESKTOP_COMPONENT" == "$1" ]]
             ;;
         *) return 1 ;;
@@ -1125,11 +1069,7 @@ start_component_version_checks() {
     for component in "${COMPONENT_NAMES[@]}"; do
         [[ "${COMPONENT_UPSTREAM_VERSIONS[$component]}" == hidden ]] && continue
         result_file="$COMPONENT_VERSION_WORK_DIR/$component.result"
-        if [[ "$DOWNLOAD_SOURCE" == "3" ]]; then
-            fetch_component_cnb_release_version "$component" "$result_file" &
-        else
-            fetch_component_release_version "$component" "$result_file" &
-        fi
+        fetch_component_release_version "$component" "$result_file" &
         COMPONENT_VERSION_PIDS[$component]=$!
     done
 }
@@ -1191,7 +1131,7 @@ component_status_display() {
 desktop_selection_status_display() {
     local component upstream installed_any=false
 
-    for component in kde gnome niri anland-next; do
+    for component in kde gnome niri hyprland mango denial anland-next; do
         if [[ "${COMPONENT_INSTALLED[$component]:-false}" == true ]]; then
             installed_any=true
         fi
@@ -1200,7 +1140,7 @@ desktop_selection_status_display() {
         printf '%b%s%b' "$COLOR_RED" "$(msg '未安装' 'not installed')" "$COLOR_RESET"
         return
     fi
-    for component in kde gnome niri anland-next; do
+    for component in kde gnome niri hyprland mango denial anland-next; do
         [[ "${COMPONENT_INSTALLED[$component]:-false}" == true ]] || continue
         upstream="${COMPONENT_UPSTREAM_VERSIONS[$component]:-}"
         if [[ "$upstream" == pending ]]; then
@@ -1208,7 +1148,7 @@ desktop_selection_status_display() {
             return
         fi
     done
-    for component in kde gnome niri anland-next; do
+    for component in kde gnome niri hyprland mango denial anland-next; do
         [[ "${COMPONENT_INSTALLED[$component]:-false}" == true ]] || continue
         upstream="${COMPONENT_UPSTREAM_VERSIONS[$component]:-}"
         if [[ "$upstream" == "$(msg '超时' 'timeout')" ]]; then
@@ -1358,6 +1298,9 @@ desktop_component_selection_menu() {
             print_component_status "2" "Anland GNOME (Mutter/Xwayland)" "gnome"
             print_component_status "3" "Anland Niri (Niri/Xwayland)" "niri"
             print_component_status "4" "Anland Next session" "anland-next"
+            print_component_status "5" "Anland Hyprland" "hyprland"
+            print_component_status "6" "Anland Mango" "mango"
+            print_component_status "7" "Anland Denial" "denial"
             printf '  %b[0]%b %s\n\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '返回' 'Back')"
         fi
         draw_dynamic_menu_prompt
@@ -1389,6 +1332,15 @@ desktop_component_selection_menu() {
             4)
                 restore_dynamic_menu_echo
                 component_menu "anland-next" "Anland Next session"
+                return
+                ;;
+            5|6|7)
+                restore_dynamic_menu_echo
+                case "$choice" in
+                    5) component_menu hyprland "Anland Hyprland" ;;
+                    6) component_menu mango "Anland Mango" ;;
+                    7) component_menu denial "Anland Denial" ;;
+                esac
                 return
                 ;;
             0|q)
@@ -1448,7 +1400,7 @@ component_menu() {
 }
 
 select_download_source() {
-    local choice
+    local choice selected_source
     while :; do
         clear_screen
         draw_header
@@ -1462,12 +1414,18 @@ select_download_source() {
         printf '%s: ' "$(msg '请选择' 'Select')"
         IFS= read -r choice || return
         case "$choice" in
-            1) DOWNLOAD_SOURCE="auto"; return ;;
-            2) DOWNLOAD_SOURCE="1"; return ;;
-            3) DOWNLOAD_SOURCE="2"; return ;;
-            4) DOWNLOAD_SOURCE="3"; return ;;
+            1) selected_source="auto" ;;
+            2) selected_source="1" ;;
+            3) selected_source="2" ;;
+            4) selected_source="3" ;;
             0|q|Q) return ;;
+            *) continue ;;
         esac
+        if [[ "$DOWNLOAD_SOURCE" != "$selected_source" ]]; then
+            DOWNLOAD_SOURCE="$selected_source"
+            COMPONENT_REFRESH_REQUIRED=true
+        fi
+        return
     done
 }
 
@@ -2042,14 +2000,11 @@ show_about() {
     draw_header
     printf '\n%b%s%b\n\n' "$COLOR_BOLD" "$(msg '关于' 'About')" "$COLOR_RESET"
     printf '%s\n' "$(msg \
-        '此工具统一调用仓库内的七个独立安装器；下载、校验、安装和软件包管理仍由各安装器负责。' \
-        'This tool dispatches the seven standalone installers. Each installer still owns download, verification, installation, and package management.')"
+        '此工具统一调用仓库内的独立安装器；下载、校验、安装和软件包管理仍由各安装器负责。' \
+        'This tool dispatches the standalone installers. Each installer owns download, verification, installation, and package management.')"
     printf '\n%s\n' "$(msg \
-        'GNOME Anland 支持 Debian 13、Ubuntu 26.04 和 Arch Linux ARM；KDE Anland 还支持 Fedora 43/44。' \
-        'GNOME Anland supports Debian 13, Ubuntu 26.04, and Arch Linux ARM. KDE Anland also supports Fedora 43/44.')"
-    printf '\n%s\n' "$(msg \
-        'Anland Next session 支持 Debian 13、Ubuntu 26.04、Fedora 43/44 和 Arch Linux；Anland Niri 目前仅支持 Arch Linux ARM。' \
-        'Anland Next session supports Debian 13, Ubuntu 26.04, Fedora 43/44, and Arch Linux. Anland Niri currently supports Arch Linux ARM only.')"
+        'Anland KDE、GNOME、Niri、Hyprland、Mango、Denial 和 Next session 支持 Debian 13、Ubuntu 26.04、Fedora 43/44 与 Arch Linux ARM，均要求 ARM64 架构。' \
+        'Anland KDE, GNOME, Niri, Hyprland, Mango, Denial, and Next session support Debian 13, Ubuntu 26.04, Fedora 43/44, and Arch Linux ARM on ARM64.')"
     printf '\n%s\n' "$(msg \
         '桌面更新项根据 /etc/droidspaces-desktop.conf 中的 DESKTOP 字段选择。' \
         'The desktop update entry is selected by the DESKTOP field in /etc/droidspaces-desktop.conf.')"

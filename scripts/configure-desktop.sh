@@ -11,6 +11,10 @@ templates="${START_TEMPLATES_DIR:-/tmp/droidspaces-start}"
 profile_dir="${DROIDSPACES_DESKTOP_PROFILE_DIR:-/usr/local/lib/droidspaces/desktops}"
 config="$rootfs/etc/droidspaces-desktop.conf"
 
+if [[ -r "$rootfs/etc/os-release" ]]; then
+    source "$rootfs/etc/os-release"
+fi
+
 configure_anland_next_runtime() {
     local bashrc="$rootfs/home/$username/.bashrc"
     local kate_source="$rootfs/usr/share/applications/org.kde.kate.desktop"
@@ -81,6 +85,10 @@ if [[ "$desktop" == none && "$backend" != x11 ]]; then
     echo "不支持的桌面与显示后端组合：$desktop/$backend" >&2
     exit 1
 fi
+if [[ "$desktop" == kde && "$backend" == x11 && "$ID" =~ ^(arch|archarm|archlinux)$ ]]; then
+    echo "Arch Linux 不支持 KDE X11；请使用 Anland Wayland。" >&2
+    exit 1
+fi
 if [[ "$desktop" == kde-mobile && "$backend" != anland-wayland ]]; then
     echo "不支持的桌面与显示后端组合：$desktop/$backend" >&2
     exit 1
@@ -93,7 +101,7 @@ if [[ "$desktop" == anland-next && "$backend" != anland-wayland ]]; then
     echo "不支持的桌面与显示后端组合：$desktop/$backend" >&2
     exit 1
 fi
-if [[ "$desktop" == niri && "$backend" != anland-wayland ]]; then
+if [[ "$desktop" =~ ^(niri|hyprland|mango|denial)$ && "$backend" != anland-wayland ]]; then
     echo "不支持的桌面与显示后端组合：$desktop/$backend" >&2
     exit 1
 fi
@@ -106,9 +114,13 @@ chmod 0644 "$config"
 
 # 桌面专属环境必须在 Dockerfile 完成 /etc/environment 后配置。
 if [[ "$desktop" != none ]]; then
-    profile="$profile_dir/$desktop.sh"
+    profile_desktop="$desktop"
+    case "$desktop" in
+        hyprland|mango|denial) profile_desktop="niri" ;;
+    esac
+    profile="$profile_dir/$profile_desktop.sh"
     [[ -x "$profile" ]] || { echo "桌面配置脚本不存在或不可执行：$profile" >&2; exit 1; }
-    ROOTFS_DIR="$rootfs" "$profile" configure-environment "$backend"
+    ROOTFS_DIR="$rootfs" DROIDSPACES_DESKTOP="$desktop" "$profile" configure-environment "$backend"
 fi
 
 if [[ "$desktop" == anland-next ]]; then

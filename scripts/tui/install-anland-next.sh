@@ -18,6 +18,12 @@ readonly GITHUB_RELEASE_URL="https://github.com"
 readonly GITHUB_API_URL="https://api.github.com"
 readonly GH_PROXY_RELEASE_URL="https://gh-proxy.com/https://github.com"
 readonly CNB_RELEASE_URL="https://cnb.cool"
+readonly APT_HOLD_STATE="/var/lib/anland-next/apt-holds"
+readonly DNF_MANAGED_BEGIN="# BEGIN anland-next package holds"
+readonly DNF_MANAGED_END="# END anland-next package holds"
+readonly MESA_DNF_MANAGED_BEGIN="# BEGIN install-mesa package holds"
+readonly MESA_DNF_MANAGED_END="# END install-mesa package holds"
+readonly SYSTEMD257_STATE="/etc/droidspaces-systemd257"
 readonly COMPONENT_STATE_DIR="${DROIDSPACES_COMPONENT_STATE_DIR:-/var/lib/droidspaces-tui/components}"
 
 WORK_DIR=""
@@ -31,6 +37,7 @@ ASSET_PREFIX=""
 ASSET_SUFFIX=""
 PACKAGE_NAME=""
 PACKAGE_FILE=""
+PACKAGE_DIR=""
 PACKAGE_VERSION=""
 DOWNLOAD_SOURCE=""
 SKIP_SOURCE_PROBE=false
@@ -49,7 +56,7 @@ detect_language() {
 }
 
 msg() {
-    if [[ "$UI_LANG" == zh ]]; then
+    if [[ "$UI_LANG" == "zh" ]]; then
         printf '%s' "$1"
     else
         printf '%s' "$2"
@@ -66,17 +73,14 @@ die() {
 }
 
 record_component_version() {
-    local version="$1"
-    local state_file="$COMPONENT_STATE_DIR/anland-next.version"
-    local temporary_file
-
+    local version="$1" state_file="$COMPONENT_STATE_DIR/anland-next.version" temporary_file
     [[ "$version" =~ ^[0-9A-Za-z][0-9A-Za-z.+:~_-]{0,63}$ ]] || return 0
-    mkdir -p -- "$COMPONENT_STATE_DIR" || {
-        log "无法记录 Anland Next 版本。" "Could not record the Anland Next version."
+    if ! mkdir -p -- "$COMPONENT_STATE_DIR"; then
+        log "无法记录已安装的 Next 版本。" "Could not record the installed Next version."
         return 0
-    }
+    fi
     temporary_file="$(mktemp "$state_file.tmp.XXXXXXXX")" || {
-        log "无法记录 Anland Next 版本。" "Could not record the Anland Next version."
+        log "无法记录已安装的 Next 版本。" "Could not record the installed Next version."
         return 0
     }
     if printf '%s\n' "$version" > "$temporary_file" && \
@@ -84,7 +88,8 @@ record_component_version() {
         return 0
     fi
     rm -f -- "$temporary_file" || true
-    log "无法记录 Anland Next 版本。" "Could not record the Anland Next version."
+    log "无法记录已安装的 Next 版本。" "Could not record the installed Next version."
+    return 0
 }
 
 parse_arguments() {
@@ -175,7 +180,7 @@ detect_target() {
     local system_name="${PRETTY_NAME:-$distro_id${version_id:+ $version_id}}"
 
     case "$distro_id" in
-        arch|archarm)
+        arch|archarm|archlinux)
             TARGET="Arch Linux"
             PACKAGE_TYPE="pkg.tar.*"
             MANIFEST_TARGET="arch"
@@ -237,9 +242,20 @@ check_architecture() {
 }
 
 validate_repository() {
-    [[ "$RELEASE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || \
+    if [[ ! "$RELEASE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
         die "Release 仓库必须是 owner/repository 格式。" \
             "The Release repository must use the owner/repository format."
+    fi
+}
+
+validate_release_tag() {
+    case "$RELEASE_TAG" in
+        "$ROLLING_RELEASE_TAG") ;;
+        *)
+            die "Release tag 只能是 ${ROLLING_RELEASE_TAG}。" \
+                "The Release tag must be ${ROLLING_RELEASE_TAG}."
+            ;;
+    esac
 }
 
 resolve_release_tag() {
@@ -247,35 +263,32 @@ resolve_release_tag() {
     if [[ -z "$RELEASE_TAG" ]]; then
         RELEASE_TAG="$ROLLING_RELEASE_TAG"
     fi
-    [[ "$RELEASE_TAG" == "$ROLLING_RELEASE_TAG" ]] || \
-        die "Release tag 只能是 ${ROLLING_RELEASE_TAG}。" \
-            "The Release tag must be ${ROLLING_RELEASE_TAG}."
-    log "使用固定滚动 Release：${RELEASE_TAG}" "Using rolling Release: ${RELEASE_TAG}"
+    validate_release_tag
+    log "使用固定滚动 Release: ${RELEASE_TAG}" "Using rolling Release: ${RELEASE_TAG}"
 }
 
 download_file() {
-    local url="$1" destination="$2"
+    local url="$1"
+    local destination="$2"
+
     if command -v curl >/dev/null 2>&1; then
-        curl -fL --retry 3 --retry-all-errors --connect-timeout 20 --max-time 300 \
-            "$url" -o "$destination"
+        curl -fL --retry 3 --retry-all-errors --connect-timeout 20 --max-time 300 "$url" -o "$destination"
     elif command -v wget >/dev/null 2>&1; then
-        wget --tries=3 --timeout=20 --waitretry=3 --retry-connrefused \
-            -O "$destination" "$url"
+        wget --tries=3 --timeout=20 --waitretry=3 --retry-connrefused -O "$destination" "$url"
     else
-        die "未找到 curl 或 wget，无法下载安装包。" \
-            "Neither curl nor wget was found; packages cannot be downloaded."
+        die "未找到 curl 或 wget，无法下载安装包。" "Neither curl nor wget was found; packages cannot be downloaded."
     fi
 }
 
 download_stdout() {
     local url="$1"
+
     if command -v curl >/dev/null 2>&1; then
         curl -fsSL --retry 3 --retry-all-errors --connect-timeout 20 --max-time 60 "$url"
     elif command -v wget >/dev/null 2>&1; then
         wget -q --tries=3 --timeout=20 --waitretry=3 --retry-connrefused -O - "$url"
     else
-        die "未找到 curl 或 wget，无法读取 Release 信息。" \
-            "Neither curl nor wget was found; Release information cannot be read."
+        die "未找到 curl 或 wget，无法读取 Release 信息。" "Neither curl nor wget was found; Release information cannot be read."
     fi
 }
 
@@ -298,42 +311,78 @@ download_source_name() {
 }
 
 download_source_probe_url() {
-    case "$1" in
-        1) printf '%s/%s/releases/download/%s/%s' \
-            "$GITHUB_RELEASE_URL" "$RELEASE_REPOSITORY" "$RELEASE_TAG" "$MANIFEST_NAME" ;;
-        2) printf '%s/%s/releases/download/%s/%s' \
-            "$GH_PROXY_RELEASE_URL" "$RELEASE_REPOSITORY" "$RELEASE_TAG" "$MANIFEST_NAME" ;;
-        3) printf '%s/%s/-/releases/download/%s/%s' \
-            "$CNB_RELEASE_URL" "$RELEASE_REPOSITORY" "$RELEASE_TAG" "$MANIFEST_NAME" ;;
+    local source="$1"
+
+    case "$source" in
+        1)
+            printf '%s/%s/releases/download/%s/%s' \
+                "$GITHUB_RELEASE_URL" "$RELEASE_REPOSITORY" "$RELEASE_TAG" "$MANIFEST_NAME"
+            ;;
+        2)
+            printf '%s/%s/releases/download/%s/%s' \
+                "$GH_PROXY_RELEASE_URL" "$RELEASE_REPOSITORY" "$RELEASE_TAG" "$MANIFEST_NAME"
+            ;;
+        3)
+            printf '%s/%s/-/releases/download/%s/%s' \
+                "$CNB_RELEASE_URL" "$RELEASE_REPOSITORY" "$RELEASE_TAG" "$MANIFEST_NAME"
+            ;;
         *) return 1 ;;
     esac
 }
 
+format_latency() {
+    local seconds="$1"
+
+    awk -v seconds="$seconds" 'BEGIN { printf "%d ms", (seconds * 1000) + 0.5 }'
+}
+
 probe_download_source() {
-    local source="$1" probe_url latency probe_status=0
+    local source="$1"
+    local probe_url latency started finished probe_status=0
+    local -a probe_command
+
     probe_url="$(download_source_probe_url "$source")" || return 1
     if command -v curl >/dev/null 2>&1; then
         if latency="$(curl -fsSL --connect-timeout "$SOURCE_PROBE_TIMEOUT_SECONDS" \
             --max-time "$SOURCE_PROBE_TIMEOUT_SECONDS" --output /dev/null \
             --write-out '%{time_total}' "$probe_url" 2>/dev/null)"; then
-            awk -v seconds="$latency" 'BEGIN { printf "%.0f ms", seconds * 1000 }'
+            if awk -v seconds="$latency" -v limit="$SOURCE_PROBE_TIMEOUT_SECONDS" \
+                'BEGIN { exit (seconds < limit ? 0 : 1) }'; then
+                format_latency "$latency"
+                return
+            fi
+            printf '%s' "$(msg '超时' 'timeout')"
             return
         else
             probe_status=$?
         fi
     elif command -v wget >/dev/null 2>&1; then
-        if timeout "$SOURCE_PROBE_TIMEOUT_SECONDS" wget -q --tries=1 \
-            --timeout="$SOURCE_PROBE_TIMEOUT_SECONDS" -O /dev/null "$probe_url"; then
-            printf '%s' "$(msg '可用' 'available')"
+        command -v timeout >/dev/null 2>&1 || \
+            die "wget 测试下载源需要 timeout 命令以限制为 ${SOURCE_PROBE_TIMEOUT_SECONDS} 秒。" \
+                "Testing download sources with wget requires timeout to enforce the ${SOURCE_PROBE_TIMEOUT_SECONDS}-second limit."
+        started="$(date +%s%3N 2>/dev/null || true)"
+        probe_command=(wget -q --tries=1 --timeout="$SOURCE_PROBE_TIMEOUT_SECONDS" -O /dev/null "$probe_url")
+        probe_command=(timeout "$SOURCE_PROBE_TIMEOUT_SECONDS" "${probe_command[@]}")
+        if "${probe_command[@]}"; then
+            finished="$(date +%s%3N 2>/dev/null || true)"
+            if [[ "$started" =~ ^[0-9]+$ && "$finished" =~ ^[0-9]+$ ]]; then
+                if (( finished - started < SOURCE_PROBE_TIMEOUT_SECONDS * 1000 )); then
+                    printf '%d ms' "$((finished - started))"
+                else
+                    printf '%s' "$(msg '超时' 'timeout')"
+                fi
+            else
+                printf '%s' "$(msg '可用' 'available')"
+            fi
             return
         else
             probe_status=$?
         fi
     else
-        die "未找到 curl 或 wget，无法测试下载源。" \
-            "Neither curl nor wget was found; download sources cannot be tested."
+        die "未找到 curl 或 wget，无法测试下载源。" "Neither curl nor wget was found; download sources cannot be tested."
     fi
-    if ((probe_status == 28 || probe_status == 124)); then
+
+    if (( probe_status == 28 || probe_status == 124 )); then
         printf '%s' "$(msg '超时' 'timeout')"
     else
         printf '%s' "$(msg '不可用' 'unavailable')"
@@ -342,6 +391,7 @@ probe_download_source() {
 
 select_download_source() {
     local source latency choice recommendation
+
     if [[ "$SKIP_SOURCE_PROBE" == true ]]; then
         log "已按参数选择 $(download_source_name "$DOWNLOAD_SOURCE")，跳过延迟测试。" \
             "Selected $(download_source_name "$DOWNLOAD_SOURCE") from the command line; skipping latency checks."
@@ -353,23 +403,35 @@ select_download_source() {
     for source in 1 2 3; do
         latency="$(probe_download_source "$source")"
         recommendation=""
-        [[ "$source" == 3 ]] && recommendation="$(msg '（推荐）' ' (recommended)')"
+        if [[ "$source" == "3" ]]; then
+            recommendation="$(msg '（推荐）' ' (recommended)')"
+        fi
         printf '%s. %s%s %s: %s\n' "$source" "$(download_source_name "$source")" \
             "$recommendation" "$(msg '延迟' 'latency')" "$latency"
     done
 
     while :; do
         printf '%s' "$(msg '请输入下载源编号 [1-3]: ' 'Choose a download source [1-3]: ')"
-        IFS= read -r choice || die "无法读取下载源选择。" "Unable to read a download-source choice."
+        if ! IFS= read -r choice; then
+            die "无法读取下载源选择。请使用 -1/--1、-2/--2 或 -3/--3 指定下载源。" \
+                "Unable to read a download-source choice. Specify -1/--1, -2/--2, or -3/--3."
+        fi
         case "$choice" in
-            1|2|3) DOWNLOAD_SOURCE="$choice"; return ;;
-            *) log "请输入 1、2 或 3。" "Enter 1, 2, or 3." ;;
+            1|2|3)
+                DOWNLOAD_SOURCE="$choice"
+                return
+                ;;
+            *)
+                log "请输入 1、2 或 3。" "Enter 1, 2, or 3."
+                ;;
         esac
     done
 }
 
 fetch_official_release_metadata() {
-    local api_url="${GITHUB_API_URL}/repos/${RELEASE_REPOSITORY}/releases/tags/${RELEASE_TAG}"
+    local api_url
+
+    api_url="${GITHUB_API_URL}/repos/${RELEASE_REPOSITORY}/releases/tags/${RELEASE_TAG}"
     if ! OFFICIAL_RELEASE_METADATA="$(download_stdout "$api_url")"; then
         log "无法获取 GitHub 官方 SHA-256 校验值，拒绝使用第三方镜像包。" \
             "Could not obtain GitHub's official SHA-256 digest; refusing the third-party mirror package."
@@ -378,30 +440,45 @@ fetch_official_release_metadata() {
 }
 
 release_asset_sha256() {
-    local requested_name="$1" digest
+    local requested_name="$1"
+    local digest
+
     if ! digest="$(jq -er --arg name "$requested_name" --arg tag "$RELEASE_TAG" '
-        if .tag_name != $tag then error("release tag mismatch")
-        else [.assets[] | select(.name == $name) | .digest]
-             | if length == 1 then .[0] else error("asset digest is not unique") end
+        if .tag_name != $tag then
+            error("release tag mismatch")
+        else
+            [.assets[] | select(.name == $name) | .digest] |
+            if length == 1 then .[0] else error("asset digest is not unique") end
         end
     ' <<< "$OFFICIAL_RELEASE_METADATA" 2>/dev/null)"; then
         return 1
     fi
-    [[ "$digest" =~ ^sha256:([0-9A-Fa-f]{64})$ ]] || return 1
+    if [[ ! "$digest" =~ ^sha256:([0-9A-Fa-f]{64})$ ]]; then
+        return 1
+    fi
+
     printf '%s' "${BASH_REMATCH[1],,}"
 }
 
 resolve_official_manifest_sha256() {
     EXPECTED_MANIFEST_SHA256=""
-    [[ "$DOWNLOAD_SOURCE" == 1 ]] && return 0
-    command -v jq >/dev/null 2>&1 || die "选择第三方镜像需要 jq。" "jq is required for a third-party mirror."
-    command -v sha256sum >/dev/null 2>&1 || die "选择第三方镜像需要 sha256sum。" "sha256sum is required for a third-party mirror."
-    fetch_official_release_metadata || return 1
-    EXPECTED_MANIFEST_SHA256="$(release_asset_sha256 "$MANIFEST_NAME")" || {
-        log "GitHub Release 未提供 ${MANIFEST_NAME} 的 SHA-256 校验值。" \
-            "GitHub Release has no valid SHA-256 digest for ${MANIFEST_NAME}."
+    if [[ "$DOWNLOAD_SOURCE" == "1" ]]; then
+        return
+    fi
+    command -v jq >/dev/null 2>&1 || \
+        die "选择第三方镜像需要 jq 来校验 GitHub Release。" \
+            "Selecting a third-party mirror requires jq to verify the GitHub Release."
+    command -v sha256sum >/dev/null 2>&1 || \
+        die "选择第三方镜像需要 sha256sum 来校验下载文件。" \
+            "Selecting a third-party mirror requires sha256sum to verify downloaded files."
+    if ! fetch_official_release_metadata; then
         return 1
-    }
+    fi
+    if ! EXPECTED_MANIFEST_SHA256="$(release_asset_sha256 "$MANIFEST_NAME")"; then
+        log "GitHub Release 未提供 ${MANIFEST_NAME} 的 SHA-256 校验值，拒绝使用第三方镜像包。" \
+            "GitHub Release did not provide a SHA-256 digest for ${MANIFEST_NAME}; refusing the third-party mirror package."
+        return 1
+    fi
 }
 
 resolve_official_package_sha256() {
@@ -543,9 +620,14 @@ require_runtime_dependencies() {
 }
 
 validate_release_asset_checksum() {
-    local asset_file="$1" expected_checksum="$2" asset_name="$3" actual_checksum
-    actual_checksum="$(sha256sum "$asset_file" | awk '{print $1}')"
-    if [[ ! "$actual_checksum" =~ ^[0-9a-f]{64}$ || "$actual_checksum" != "$expected_checksum" ]]; then
+    local asset_file="$1"
+    local expected_checksum="$2"
+    local asset_name="$3"
+    local actual_checksum
+
+    if ! actual_checksum="$(sha256sum "$asset_file" | awk '{print $1}')" || \
+        ! [[ "$actual_checksum" =~ ^[0-9a-f]{64}$ ]] || \
+        [[ "$actual_checksum" != "$expected_checksum" ]]; then
         log "下载的 ${asset_name} 未通过 SHA-256 校验。" \
             "Downloaded ${asset_name} failed SHA-256 verification."
         return 1
@@ -586,6 +668,7 @@ download_packages_once() {
     if [[ -n "$EXPECTED_PACKAGE_SHA256" ]]; then
         validate_release_asset_checksum "$PACKAGE_FILE" "$EXPECTED_PACKAGE_SHA256" "$PACKAGE_NAME" || return 1
     fi
+    PACKAGE_DIR="${PACKAGE_FILE%/*}"
     validate_package_file || {
         log "下载的软件包不是当前系统的有效 ARM64 anland-session 包。" \
             "The downloaded package is not a valid ARM64 anland-session package for this system."
@@ -596,22 +679,24 @@ download_packages_once() {
 download_packages() {
     local attempt
     WORK_DIR="$(mktemp -d -t anland-next.XXXXXXXX)"
+
     for ((attempt = 1; attempt <= 3; attempt++)); do
-        if ((attempt > 1)); then
+        if (( attempt > 1 )); then
             rm -rf -- "$WORK_DIR"
             mkdir -m 700 -- "$WORK_DIR"
         fi
         if download_packages_once; then
             return
         fi
-        if ((attempt < 3)); then
-            log "Release 正在更新或网络暂时失败，准备重试（第 ${attempt} 次）。" \
-                "The Release is updating or the network failed; retrying after attempt ${attempt}."
+        if (( attempt < 3 )); then
+            log "Release 正在更新或网络暂时失败，准备重新获取（第 ${attempt} 次）。" \
+                "The Release is being updated or the network failed; retrying after attempt ${attempt}."
             sleep "$attempt"
         fi
     done
-    die "无法稳定获取 Anland Next 软件包，请稍后重试。" \
-        "Unable to consistently download the Anland Next package; please try again later."
+
+    die "无法稳定获取 Release 包，请稍后重试。" \
+        "Unable to consistently download the Release package; please retry later."
 }
 
 use_prepared_package() {
@@ -634,6 +719,7 @@ use_prepared_package() {
     esac
     WORK_DIR="$prepared_work_dir"
     PACKAGE_FILE="$prepared_package_file"
+    PACKAGE_DIR="${PACKAGE_FILE%/*}"
     validate_package_file || die "预下载软件包校验失败。" "The pre-downloaded package failed validation."
 }
 
@@ -670,32 +756,381 @@ verify_installed_xwayland_paths() {
     fi
 }
 
-install_deb_package() {
+clear_stale_apt_holds() {
+    local -a current_packages=("$@") previous_packages=()
+    local previous current keep
+
+    [[ -r "$APT_HOLD_STATE" ]] || return 0
+    mapfile -t previous_packages < <(sed -nE 's/^([a-z0-9][a-z0-9+.-]*)$/\1/p' "$APT_HOLD_STATE" | sort -u)
+    for previous in "${previous_packages[@]}"; do
+        keep=false
+        for current in "${current_packages[@]}"; do
+            if [[ "$previous" == "$current" ]]; then
+                keep=true
+                break
+            fi
+        done
+        if [[ "$keep" == false ]]; then
+            apt-mark unhold "$previous" >/dev/null 2>&1 || true
+        fi
+    done
+}
+
+write_apt_hold_state() {
+    install -d -m 0755 "$(dirname "$APT_HOLD_STATE")"
+    printf '%s\n' "$@" | sort -u > "$APT_HOLD_STATE"
+}
+
+validate_managed_dnf_block() {
+    local dnf_conf="$1"
+
+    awk -v begin="$DNF_MANAGED_BEGIN" -v end="$DNF_MANAGED_END" '
+        $0 == begin {
+            if (inside) {
+                invalid = 1
+            }
+            begins++
+            inside = 1
+        }
+        $0 == end {
+            if (!inside) {
+                invalid = 1
+            }
+            ends++
+            inside = 0
+        }
+        END { exit (!invalid && !inside && begins == ends && begins <= 1) ? 0 : 1 }
+    ' "$dnf_conf"
+}
+
+rewrite_dnf_config_without_managed_block() {
+    local dnf_conf="$1"
+    local output_file="$2"
+
+    validate_managed_dnf_block "$dnf_conf" || return 1
+
+    awk -v begin="$DNF_MANAGED_BEGIN" -v end="$DNF_MANAGED_END" \
+        -v legacy_begin="# anland-next: hold patched Next/Xwayland packages" '
+        $0 == begin { managed = 1; next }
+        $0 == end { managed = 0; next }
+        managed { next }
+        legacy_pending {
+            if ($0 ~ /^[[:space:]]*exclude[[:space:]]*=[[:space:]]*anland-session\*[[:space:]]+xorg-x11-server-Xwayland\*[[:space:]]*$/) {
+                legacy_pending = 0
+                next
+            }
+            print legacy_begin
+            legacy_pending = 0
+        }
+        $0 == legacy_begin {
+            legacy_pending = 1
+            next
+        }
+        { print }
+        END {
+            if (legacy_pending) {
+                print legacy_begin
+            }
+        }
+    ' "$dnf_conf" > "$output_file"
+}
+
+rewrite_dnf_config_without_mesa_block() {
+    local dnf_conf="$1"
+    local output_file="$2"
+
+    awk -v begin="$MESA_DNF_MANAGED_BEGIN" -v end="$MESA_DNF_MANAGED_END" '
+        $0 == begin {
+            if (inside) {
+                invalid = 1
+            }
+            begins++
+            inside = 1
+            next
+        }
+        $0 == end {
+            if (!inside) {
+                invalid = 1
+            }
+            ends++
+            inside = 0
+            next
+        }
+        !inside { print }
+        END {
+            if (invalid || inside || begins != ends || begins > 1) {
+                exit 1
+            }
+        }
+    ' "$dnf_conf" > "$output_file"
+}
+
+rewrite_dnf_config_for_package_install() {
+    local dnf_conf="$1"
+    local output_file="$2"
+
+    awk '
+        function sanitize(line, equals, value, count, tokens, result, separator, i) {
+            equals = index(line, "=")
+            value = substr(line, equals + 1)
+            gsub(/,/, " ", value)
+            count = split(value, tokens, /[[:space:]]+/)
+            result = ""
+            separator = ""
+            for (i = 1; i <= count; i++) {
+                if (tokens[i] == "" || \
+                    tokens[i] == "anland-session*" || \
+                    tokens[i] == "anland-session") {
+                    continue
+                }
+                result = result separator tokens[i]
+                separator = ","
+            }
+            return result == "" ? "" : substr(line, 1, equals) result
+        }
+        /^\[main\][[:space:]]*$/ {
+            in_main = 1
+            print
+            next
+        }
+        /^\[[^]]+\][[:space:]]*$/ {
+            in_main = 0
+            print
+            next
+        }
+        {
+            if (in_main && $0 ~ /^[[:space:]]*(exclude|excludepkgs)[[:space:]]*=/) {
+                sanitized = sanitize($0)
+                if (sanitized != "") {
+                    print sanitized
+                }
+                next
+            }
+            print
+        }
+    ' "$dnf_conf" > "$output_file"
+}
+
+remove_managed_dnf_excludes() {
+    local dnf_conf="$1"
+    local temporary_conf mesa_stripped_conf transaction_conf
+
+    # Local patched RPMs must bypass both hold blocks. The caller restores
+    # the original configuration immediately after the DNF transaction.
+    temporary_conf="$(mktemp -t anland-next-dnf.XXXXXXXX)"
+    mesa_stripped_conf="$(mktemp -t anland-next-dnf.XXXXXXXX)"
+    transaction_conf="$(mktemp -t anland-next-dnf.XXXXXXXX)"
+    if ! rewrite_dnf_config_without_managed_block "$dnf_conf" "$temporary_conf" || \
+        ! rewrite_dnf_config_without_mesa_block "$temporary_conf" "$mesa_stripped_conf" || \
+        ! rewrite_dnf_config_for_package_install "$mesa_stripped_conf" "$transaction_conf"; then
+        rm -f -- "$temporary_conf" "$mesa_stripped_conf" "$transaction_conf"
+        return 1
+    fi
+    if ! install -m 0644 "$transaction_conf" "$dnf_conf"; then
+        rm -f -- "$temporary_conf" "$mesa_stripped_conf" "$transaction_conf"
+        return 1
+    fi
+    rm -f -- "$temporary_conf" "$mesa_stripped_conf" "$transaction_conf"
+}
+
+write_dnf_config_with_managed_block() {
+    local dnf_conf="$1"
+    local output_file="$2"
+    local stripped_conf
+    local excluded_packages="anland-session*"
+
+    if [[ -e "$SYSTEMD257_STATE" ]]; then
+        excluded_packages+=",systemd*"
+    fi
+
+    stripped_conf="$(mktemp -t anland-next-dnf.XXXXXXXX)"
+    if ! rewrite_dnf_config_without_managed_block "$dnf_conf" "$stripped_conf"; then
+        rm -f -- "$stripped_conf"
+        return 1
+    fi
+    if ! awk -v begin="$DNF_MANAGED_BEGIN" -v end="$DNF_MANAGED_END" \
+        -v excludes="$excluded_packages" '
+        function contains(value, wanted, normalized, count, tokens, i) {
+            normalized = value
+            gsub(/,/, " ", normalized)
+            count = split(normalized, tokens, /[[:space:]]+/)
+            for (i = 1; i <= count; i++) {
+                if (tokens[i] == wanted) {
+                    return 1
+                }
+            }
+            return 0
+        }
+        function merge_excludes(line, equals, value, trimmed, separator, count, wanted, i) {
+            equals = index(line, "=")
+            value = substr(line, equals + 1)
+            trimmed = value
+            sub(/[[:space:]]+$/, "", trimmed)
+            separator = (trimmed == "" || trimmed ~ /,$/) ? "" : ","
+            count = split(excludes, wanted, ",")
+            for (i = 1; i <= count; i++) {
+                if (!contains(value, wanted[i])) {
+                    value = value separator wanted[i]
+                    separator = ","
+                }
+            }
+            return substr(line, 1, equals) value
+        }
+        function write_block() {
+            print begin
+            print "excludepkgs=" excludes
+            print end
+        }
+        /^\[main\][[:space:]]*$/ {
+            in_main = 1
+            saw_main = 1
+            print
+            next
+        }
+        /^\[[^]]+\][[:space:]]*$/ {
+            if (in_main && !saw_exclude) {
+                write_block()
+            }
+            in_main = 0
+            print
+            next
+        }
+        {
+            if (in_main && $0 ~ /^[[:space:]]*excludepkgs[[:space:]]*=/) {
+                print merge_excludes($0)
+                saw_exclude = 1
+                next
+            }
+            print
+        }
+        END {
+            if (in_main && !saw_exclude) {
+                write_block()
+            }
+            if (!saw_main) {
+                print "[main]"
+                write_block()
+            }
+        }
+    ' "$stripped_conf" > "$output_file"; then
+        rm -f -- "$stripped_conf"
+        return 1
+    fi
+    rm -f -- "$stripped_conf"
+}
+
+configure_dnf_excludes() {
+    local dnf_conf="/etc/dnf/dnf.conf"
+    local temporary_conf
+
+    touch "$dnf_conf"
+    temporary_conf="$(mktemp -t anland-next-dnf.XXXXXXXX)"
+    if ! write_dnf_config_with_managed_block "$dnf_conf" "$temporary_conf"; then
+        rm -f -- "$temporary_conf"
+        return 1
+    fi
+    if ! install -m 0644 "$temporary_conf" "$dnf_conf"; then
+        rm -f -- "$temporary_conf"
+        return 1
+    fi
+    rm -f -- "$temporary_conf"
+}
+
+install_deb_packages() {
+    local -a files packages
+    local file package
+
     command -v apt-get >/dev/null 2>&1 || die "未找到 apt-get。" "apt-get was not found."
-    log "正在通过 APT 安装 anland-session 并处理依赖..." \
-        "Installing anland-session through APT and resolving dependencies..."
-    (
-        cd "${PACKAGE_FILE%/*}"
-        export DEBIAN_FRONTEND=noninteractive
-        apt-get install -y --reinstall --allow-downgrades --allow-change-held-packages "./${PACKAGE_FILE##*/}"
-    )
-    dpkg-query -W -f='${db:Status-Status}' anland-session 2>/dev/null | \
-        grep -Fqx installed || die "APT 未安装 anland-session。" "APT did not install anland-session."
+    command -v dpkg-deb >/dev/null 2>&1 || die "未找到 dpkg-deb。" "dpkg-deb was not found."
+    mapfile -t files < <(find "$PACKAGE_DIR" -maxdepth 1 -type f -name '*.deb' -print | sort)
+    ((${#files[@]} > 0)) || die "没有可安装的 deb 包。" "No installable deb packages were found."
+
+    log "正在安装 ${#files[@]} 个 deb 包并自动处理依赖..." \
+        "Installing ${#files[@]} deb packages and resolving dependencies..."
+    apt-get install -y --reinstall --allow-downgrades --allow-change-held-packages "${files[@]}"
+
+    for file in "${files[@]}"; do
+        package="$(dpkg-deb -f "$file" Package)"
+        [[ -n "$package" ]] && packages+=("$package")
+    done
+    mapfile -t packages < <(printf '%s\n' "${packages[@]}" | sort -u)
+    ((${#packages[@]} > 0)) || die "无法读取 deb 包名。" "Could not determine the deb package names."
+
+    clear_stale_apt_holds "${packages[@]}"
+    log "正在设置 APT hold..." "Applying APT holds..."
+    apt-mark hold "${packages[@]}"
+    write_apt_hold_state "${packages[@]}"
+    printf '  hold: %s\n' "${packages[@]}"
 }
 
-install_rpm_package() {
+install_rpm_packages() {
+    local -a files packages dnf_install_options=() install_files=() reinstall_files=()
+    local file package_name package_version installed_version
+    local dnf_conf="/etc/dnf/dnf.conf"
+    local dnf_backup
+
     command -v dnf >/dev/null 2>&1 || die "未找到 dnf。" "dnf was not found."
-    log "正在通过 DNF 安装 anland-session 并处理依赖..." \
-        "Installing anland-session through DNF and resolving dependencies..."
-    dnf install -y --setopt=install_weak_deps=False "$PACKAGE_FILE"
-    rpm -q anland-session >/dev/null || die "DNF 未安装 anland-session。" "DNF did not install anland-session."
+    command -v rpm >/dev/null 2>&1 || die "未找到 rpm。" "rpm was not found."
+    mapfile -t files < <(find "$PACKAGE_DIR" -maxdepth 1 -type f -name '*.rpm' -print | sort)
+    ((${#files[@]} > 0)) || die "没有可安装的 rpm 包。" "No installable rpm packages were found."
+
+    for file in "${files[@]}"; do
+        package_name="$(rpm -qp --queryformat '%{NAME}' "$file")"
+        package_version="$(rpm -qp --queryformat '%{EPOCHNUM}:%{VERSION}-%{RELEASE}' "$file")"
+        installed_version="$(rpm -q --queryformat '%{EPOCHNUM}:%{VERSION}-%{RELEASE}' "$package_name" 2>/dev/null || true)"
+        if [[ "$installed_version" == "$package_version" ]]; then
+            reinstall_files+=("$file")
+        else
+            install_files+=("$file")
+        fi
+    done
+
+    log "正在安装 ${#files[@]} 个 rpm 包并自动处理依赖..." \
+        "Installing ${#files[@]} rpm packages and resolving dependencies..."
+    touch "$dnf_conf"
+    dnf_backup="$(mktemp -t anland-next-dnf-backup.XXXXXXXX)"
+    cp -p "$dnf_conf" "$dnf_backup"
+    if grep -Fqx "$MESA_DNF_MANAGED_BEGIN" "$dnf_conf"; then
+        dnf_install_options+=('--exclude=mesa*')
+    fi
+    if [[ -e "$SYSTEMD257_STATE" ]]; then
+        dnf_install_options+=('--exclude=systemd*')
+    fi
+    if ! remove_managed_dnf_excludes "$dnf_conf" || \
+        ! { ((${#install_files[@]} == 0)) || dnf --nogpgcheck install -y "${dnf_install_options[@]}" "${install_files[@]}"; } || \
+        ! { ((${#reinstall_files[@]} == 0)) || dnf --nogpgcheck reinstall -y "${dnf_install_options[@]}" "${reinstall_files[@]}"; }; then
+        install -m 0644 "$dnf_backup" "$dnf_conf" || true
+        rm -f -- "$dnf_backup"
+        die "rpm 软件包安装失败。" "RPM package installation failed."
+    fi
+    if ! install -m 0644 "$dnf_backup" "$dnf_conf"; then
+        rm -f -- "$dnf_backup"
+        die "无法恢复 DNF 锁定配置。" "Unable to restore the DNF hold configuration."
+    fi
+
+    mapfile -t packages < <(rpm -qp --queryformat '%{NAME}\n' "${files[@]}" | sort -u)
+    ((${#packages[@]} > 0)) || die "无法读取 rpm 包名。" "Could not determine the rpm package names."
+    log "正在设置 DNF exclude（等效于 hold）..." "Applying DNF excludes (equivalent to hold)..."
+    if ! configure_dnf_excludes; then
+        install -m 0644 "$dnf_backup" "$dnf_conf" || true
+        rm -f -- "$dnf_backup"
+        die "无法更新 DNF 锁定配置。" "Unable to update the DNF hold configuration."
+    fi
+    rm -f -- "$dnf_backup"
+    printf '  hold: %s\n' "${packages[@]}"
 }
 
-install_arch_package() {
-    local pacman_conf
+install_arch_packages() {
+    local -a files packages
+    local pacman_conf package
+
     command -v pacman >/dev/null 2>&1 || die "未找到 pacman。" "pacman was not found."
+    mapfile -t files < <(find "$PACKAGE_DIR" -maxdepth 1 -type f -name '*.pkg.tar.*' -print | sort)
+    ((${#files[@]} > 0)) || die "没有可安装的 Arch 包。" "No installable Arch packages were found."
+
+    log "正在安装 ${#files[@]} 个 Arch 包..." "Installing ${#files[@]} Arch packages..."
     pacman_conf="$(mktemp -t anland-next-pacman.XXXXXXXX)"
-    cp -p -- /etc/pacman.conf "$pacman_conf"
+    cp /etc/pacman.conf "$pacman_conf"
     if grep -Eq '^[[:space:]]*#?[[:space:]]*LocalFileSigLevel[[:space:]]*=' "$pacman_conf"; then
         sed -i -E 's/^[[:space:]]*#?[[:space:]]*LocalFileSigLevel[[:space:]]*=.*/LocalFileSigLevel = Optional/' "$pacman_conf"
     elif grep -qE '^\[options\][[:space:]]*$' "$pacman_conf"; then
@@ -704,12 +1139,35 @@ install_arch_package() {
         rm -f -- "$pacman_conf"
         die "pacman.conf 缺少 [options] 段。" "pacman.conf has no [options] section."
     fi
-    if ! pacman --config "$pacman_conf" -U --noconfirm "$PACKAGE_FILE"; then
+    if ! pacman --config "$pacman_conf" -U --noconfirm "${files[@]}"; then
         rm -f -- "$pacman_conf"
         die "Arch 软件包安装失败。" "Arch package installation failed."
     fi
     rm -f -- "$pacman_conf"
-    pacman -Q anland-session >/dev/null || die "pacman 未安装 anland-session。" "pacman did not install anland-session."
+
+    for package in anland-session; do
+        if ! awk -v package="$package" '
+            $1 == "IgnorePkg" {
+                for (i = 3; i <= NF; i++) {
+                    if ($i == package) {
+                        found = 1
+                    }
+                }
+            }
+            END { exit found ? 0 : 1 }
+        ' /etc/pacman.conf; then
+            if grep -qE '^[[:space:]]*IgnorePkg[[:space:]]*=' /etc/pacman.conf; then
+                sed -i -E "0,/^[[:space:]]*IgnorePkg[[:space:]]*=/{s/^([[:space:]]*IgnorePkg[[:space:]]*=.*)$/\\1 ${package}/}" /etc/pacman.conf
+            elif grep -qE '^\[options\][[:space:]]*$' /etc/pacman.conf; then
+                sed -i "/^\[options\][[:space:]]*$/a IgnorePkg = ${package}" /etc/pacman.conf
+            else
+                die "pacman.conf 缺少 [options] 段。" "pacman.conf has no [options] section."
+            fi
+        fi
+    done
+    mapfile -t packages < <(pacman -Qq -p "${files[@]}" | sort -u)
+    ((${#packages[@]} > 0)) || die "无法读取 Arch 包名。" "Could not determine the Arch package names."
+    printf '  hold: %s\n' "${packages[@]}"
 }
 
 refresh_user_service() {
@@ -734,36 +1192,157 @@ stop_user_service() {
     systemctl --user disable --now anland-session.service >/dev/null 2>&1 || true
 }
 
+uninstall_next_deb() {
+    local package candidate action
+    local -a packages=() package_specs=() remove_packages=()
+    command -v apt-cache >/dev/null 2>&1 || die "未找到 apt-cache。" "apt-cache was not found."
+    command -v apt-get >/dev/null 2>&1 || die "未找到 apt-get。" "apt-get was not found."
+    command -v apt-mark >/dev/null 2>&1 || die "未找到 apt-mark。" "apt-mark was not found."
+    if [[ -s "$APT_HOLD_STATE" ]]; then
+        mapfile -t packages < <(sed -nE 's/^([a-z0-9][a-z0-9+.-]*)$/\1/p' "$APT_HOLD_STATE" | sort -u)
+        ((${#packages[@]} > 0)) || die "APT hold 清单为空。" "The APT hold list is empty."
+    elif dpkg-query -W -f='${db:Status-Status}' anland-session 2>/dev/null | grep -Fqx installed; then
+        # Older installers did not write KDE-style APT hold lists.
+        for package in anland-session; do
+            if dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null | grep -Fqx installed; then
+                packages+=("$package")
+            fi
+        done
+    else
+        rm -f -- "$COMPONENT_STATE_DIR/anland-next.version"
+        log "没有 Anland Next 安装记录。" "No Anland Next installation record was found."
+        return 0
+    fi
+    local -a unhold_packages=()
+    for package in "${packages[@]}"; do
+        action="$(uninstall_package_action "$package")" || die "安装记录含未知软件包。" "The installation record contains an unknown package."
+        [[ "$action" != keep ]] || continue
+        unhold_packages+=("$package")
+        if [[ "$action" == remove ]]; then
+            remove_packages+=("$package")
+            continue
+        fi
+        candidate="$(apt-cache madison "$package" | awk -F '|' 'NR == 1 {
+            value = $2
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+            print value
+        }')"
+        if [[ -z "$candidate" && "$action" == auxiliary ]]; then
+            remove_packages+=("$package")
+            continue
+        fi
+        [[ -n "$candidate" ]] || die "找不到 $package 的官方候选版本。" "No distribution candidate was found for $package."
+        package_specs+=("$package=$candidate")
+    done
+    ((${#unhold_packages[@]} == 0)) || apt-mark unhold "${unhold_packages[@]}" >/dev/null
+    ((${#package_specs[@]} == 0)) || apt-get install -y --reinstall --allow-downgrades --allow-change-held-packages "${package_specs[@]}"
+    ((${#remove_packages[@]} == 0)) || apt-get remove -y --allow-change-held-packages "${remove_packages[@]}"
+    rm -f -- "$APT_HOLD_STATE" "$COMPONENT_STATE_DIR/anland-next.version"
+    rmdir -- "${APT_HOLD_STATE%/*}" 2>/dev/null || true
+}
+
+uninstall_next_rpm() {
+    local dnf_conf="/etc/dnf/dnf.conf" backup stripped transaction package action
+    local -a packages=() restore_packages=() remove_packages=()
+    command -v dnf >/dev/null 2>&1 || die "未找到 dnf。" "dnf was not found."
+    command -v rpm >/dev/null 2>&1 || die "未找到 rpm。" "rpm was not found."
+    [[ -f "$dnf_conf" ]] || die "找不到 DNF 配置。" "The DNF configuration was not found."
+    if ! rpm -q anland-session >/dev/null 2>&1 && [[ ! -s "$COMPONENT_STATE_DIR/anland-next.version" ]] &&
+        ! grep -Fqx "$DNF_MANAGED_BEGIN" "$dnf_conf"; then
+        log "没有 Anland Next 安装记录。" "No Anland Next installation record was found."
+        return 0
+    fi
+    mapfile -t packages < <(rpm -qa --queryformat '%{NAME}\n' | awk '/^anland-session$/' | sort -u)
+    for package in "${packages[@]}"; do
+        action="$(uninstall_package_action "$package")" || die "检测到未知软件包。" "An unknown package was detected."
+        case "$action" in
+            keep) ;;
+            remove) remove_packages+=("$package") ;;
+            *) restore_packages+=("$package") ;;
+        esac
+    done
+    backup="$(mktemp -t anland-next-uninstall.XXXXXXXX)"
+    stripped="$(mktemp -t anland-next-uninstall.XXXXXXXX)"
+    transaction="$(mktemp -t anland-next-uninstall.XXXXXXXX)"
+    cp -p -- "$dnf_conf" "$backup"
+    if ! rewrite_dnf_config_without_managed_block "$dnf_conf" "$stripped" || \
+        ! rewrite_dnf_config_for_package_install "$stripped" "$transaction" || \
+        ! install -m 0644 "$transaction" "$dnf_conf" || \
+        ! { ((${#remove_packages[@]} == 0)) || dnf remove -y --no-autoremove "${remove_packages[@]}"; } || \
+        ! { ((${#restore_packages[@]} == 0)) || dnf distro-sync -y --exclude='mesa*' --exclude='systemd*' "${restore_packages[@]}"; } || \
+        ! { ((${#restore_packages[@]} == 0)) || dnf reinstall -y --exclude='mesa*' --exclude='systemd*' "${restore_packages[@]}"; }; then
+        install -m 0644 "$backup" "$dnf_conf" || true
+        rm -f -- "$backup" "$stripped" "$transaction"
+        die "卸载 Anland Next 或恢复发行版图形包失败。" "Failed to uninstall Anland Next or restore distribution graphics packages."
+    fi
+    rm -f -- "$backup" "$stripped" "$transaction" "$COMPONENT_STATE_DIR/anland-next.version"
+    rmdir -- "${APT_HOLD_STATE%/*}" 2>/dev/null || true
+}
+
+uninstall_next_arch() {
+    local package action backup stripped
+    local -a packages=() restore_packages=() remove_packages=()
+    command -v pacman >/dev/null 2>&1 || die "未找到 pacman。" "pacman was not found."
+    [[ -f /etc/pacman.conf ]] || die "找不到 pacman.conf。" "pacman.conf was not found."
+    if ! pacman -Q anland-session >/dev/null 2>&1 && [[ ! -s "$COMPONENT_STATE_DIR/anland-next.version" ]]; then
+        log "没有 Anland Next 安装记录。" "No Anland Next installation record was found."
+        return 0
+    fi
+    for package in anland-session; do
+        pacman -Q "$package" >/dev/null 2>&1 || continue
+        action="$(uninstall_package_action "$package")" || die "检测到未知软件包。" "An unknown package was detected."
+        [[ "$action" != keep ]] || continue
+        packages+=("$package")
+        if [[ "$action" == remove ]]; then
+            remove_packages+=("$package")
+        else
+            restore_packages+=("$package")
+        fi
+    done
+    backup="$(mktemp -t anland-next-uninstall.XXXXXXXX)"
+    stripped="$(mktemp -t anland-next-uninstall.XXXXXXXX)"
+    cp -p -- /etc/pacman.conf "$backup"
+    if ! awk -v remove_list="${packages[*]}" \
+        -v begin="# BEGIN anland-next package holds" -v end="# END anland-next package holds" '
+        $0 == begin || $0 == end { next }
+        BEGIN { remove_count = split(remove_list, remove_names, /[[:space:]]+/) }
+        /^[[:space:]]*IgnorePkg[[:space:]]*=/ {
+            equals = index($0, "=")
+            count = split(substr($0, equals + 1), items, /[[:space:]]+/)
+            output = ""
+            for (i = 1; i <= count; i++) {
+                remove = 0
+                for (j = 1; j <= remove_count; j++) if (items[i] == remove_names[j]) remove = 1
+                if (items[i] != "" && !remove) output = output (output == "" ? "" : " ") items[i]
+            }
+            if (output != "") print substr($0, 1, equals) " " output
+            next
+        }
+        { print }
+    ' /etc/pacman.conf > "$stripped" || \
+        ! install -m 0644 "$stripped" /etc/pacman.conf || \
+        ! { ((${#remove_packages[@]} == 0)) || pacman -R --noconfirm "${remove_packages[@]}"; } || \
+        ! { ((${#restore_packages[@]} == 0)) || pacman -S --noconfirm "${restore_packages[@]}"; }; then
+        install -m 0644 "$backup" /etc/pacman.conf || true
+        rm -f -- "$backup" "$stripped"
+        die "卸载 Anland Next 或恢复发行版图形包失败。" "Failed to uninstall Anland Next or restore distribution graphics packages."
+    fi
+    rm -f -- "$backup" "$stripped" "$COMPONENT_STATE_DIR/anland-next.version"
+    rmdir -- "${APT_HOLD_STATE%/*}" 2>/dev/null || true
+}
+
+uninstall_package_action() {
+    [[ "$1" == anland-session ]] || return 1
+    printf remove
+}
+
 uninstall_package() {
     stop_user_service
     case "$PACKAGE_TYPE" in
-        deb)
-            command -v apt-get >/dev/null 2>&1 || die "未找到 apt-get。" "apt-get was not found."
-            if dpkg-query -W -f='${db:Status-Status}' anland-session 2>/dev/null | grep -Fqx installed; then
-                DEBIAN_FRONTEND=noninteractive apt-get remove -y anland-session
-            else
-                log "没有已安装的 anland-session 包。" "No installed anland-session package was found."
-            fi
-            ;;
-        rpm)
-            command -v dnf >/dev/null 2>&1 || die "未找到 dnf。" "dnf was not found."
-            if rpm -q anland-session >/dev/null 2>&1; then
-                dnf remove -y anland-session
-            else
-                log "没有已安装的 anland-session 包。" "No installed anland-session package was found."
-            fi
-            ;;
-        pkg.tar.*)
-            command -v pacman >/dev/null 2>&1 || die "未找到 pacman。" "pacman was not found."
-            if pacman -Q anland-session >/dev/null 2>&1; then
-                pacman -R --noconfirm anland-session
-            else
-                log "没有已安装的 anland-session 包。" "No installed anland-session package was found."
-            fi
-            ;;
+        deb) uninstall_next_deb ;;
+        rpm) uninstall_next_rpm ;;
+        pkg.tar.*) uninstall_next_arch ;;
     esac
-    rm -f -- "$COMPONENT_STATE_DIR/anland-next.version"
-    rmdir --ignore-fail-on-non-empty "$COMPONENT_STATE_DIR" 2>/dev/null || true
     log "Anland Next session 已卸载；发行版 Xwayland 和其他依赖未删除。" \
         "Anland Next session was uninstalled; distribution Xwayland and other dependencies were kept."
 }
@@ -793,9 +1372,9 @@ main() {
     require_root "$@"
 
     case "$PACKAGE_TYPE" in
-        deb) install_deb_package ;;
-        rpm) install_rpm_package ;;
-        pkg.tar.*) install_arch_package ;;
+        deb) install_deb_packages ;;
+        rpm) install_rpm_packages ;;
+        pkg.tar.*) install_arch_packages ;;
     esac
     verify_installed_package_version
     verify_installed_xwayland_paths

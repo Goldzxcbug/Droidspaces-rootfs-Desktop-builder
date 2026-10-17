@@ -14,6 +14,7 @@ configure_environment() {
     # 处的宿主 socket，再把应用侧的 wayland-anland 链接发布出去，写死任一种
     # 都会把会话弄坏。
     local -a assignments=(
+        XDG_SESSION_CLASS=user
         XDG_SESSION_TYPE=wayland
         ANLAND_RUNTIME_DIR=/run/anland
         MESA_LOADER_DRIVER_OVERRIDE=kgsl

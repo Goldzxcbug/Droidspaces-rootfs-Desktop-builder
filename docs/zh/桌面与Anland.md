@@ -8,12 +8,15 @@
 
 | 桌面与后端 | 手动启动命令 |
 | --- | --- |
-| KDE + X11 | `DISPLAY=:5 startplasma-x11` |
+| KDE + X11（Arch 不支持） | `DISPLAY=:5 startplasma-x11` |
 | KDE + Anland Wayland | `startplasma-wayland` |
 | KDE Mobile + Anland Wayland | `startplasmamobile` |
 | GNOME + Anland Wayland | `gnome-session --session=gnome` |
 | Anland Next | `/usr/bin/anland-session` |
 | Niri | `/usr/bin/niri-anland` |
+| Hyprland | `/usr/bin/hyprland-anland` |
+| Mango | `/usr/bin/mango-anland` |
+| Denial | `/usr/bin/denial-anland` |
 
 服务在桌面异常退出后等待 2 秒重启；60 秒内连续失败超过 5 次会暂停重试。正常退出不会触发重启。
 
@@ -27,9 +30,9 @@ startplasma-x11
 
 ### Wayland 和 Anland 宿主端配置
 
-Anland Wayland 支持 Debian 13、Ubuntu 26、Fedora 43/44 和 Arch。KDE 使用 patched KWin/Xwayland，GNOME 使用 patched Mutter。Debian、Ubuntu 和 Arch 的 GNOME 包均由 [`droidspaces-package`](https://github.com/Goldzxcbug/droidspaces-package) 发布，RootFS 构建时从对应 Release 安装。Arch 的 Niri 会话使用 `niri-anland` 与同一 Release 中的 patched Xwayland，并安装 `xdg-desktop-portal-gtk` 和 Alacritty 终端。
+Anland Wayland 支持 Debian 13、Ubuntu 26、Fedora 43/44 和 Arch。Arch KDE 仅使用 Anland Wayland；KDE 使用 patched KWin/Xwayland，GNOME 使用 patched Mutter。GNOME 在这些发行版上安装完整桌面和基础应用。Niri、Hyprland、Mango、Denial 提供轻量会话、终端、XDG portal、音频和字体，用户可自行添加桌面应用。它们的 ARM64 包由 [`droidspaces-package`](https://github.com/Goldzxcbug/droidspaces-package) 发布，RootFS 构建时从对应 Release 安装。
 
-Niri profile 会像其他桌面一样将会话与 Anland/Mesa 环境写入 `/etc/environment`。统一桌面启动入口直接运行 `/usr/bin/niri-anland`，不使用 `--session`。
+轻量 compositor profile 会将会话与 Anland/Mesa 环境写入 `/etc/environment`。统一桌面启动入口直接运行包提供的 compositor 命令，不使用 `--session`。
 
 在 Android 设备上完成以下准备：
 
@@ -54,12 +57,12 @@ Niri profile 会像其他桌面一样将会话与 Anland/Mesa 环境写入 `/etc
 sudo ./scripts/tui/install-anland-kde.sh
 ```
 
-GNOME 安装器可在 Debian 13、Ubuntu 26 与 Arch Linux ARM 上使用：
+GNOME 安装器可在 Debian 13、Ubuntu 26、Fedora 43/44 与 Arch Linux ARM 上使用：
 
 ```bash
 sudo ./scripts/tui/install-anland-gnome.sh
 ```
 
-GNOME 安装器已支持 Arch pacman 包格式，并从 `anland-gnome-packages` Release 清单读取 Arch 目标。
+GNOME 安装器已支持 Debian、Ubuntu、Fedora 和 Arch 的包格式，并从 `anland-gnome-packages` Release 清单读取匹配目标。
 
 安装器选项、下载源和校验方式见[脚本说明](../../scripts/README.md#anland-kde-安装器)。

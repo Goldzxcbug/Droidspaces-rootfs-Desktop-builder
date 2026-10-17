@@ -33,11 +33,15 @@ if [[ ! "$desktop" =~ ^[a-z][a-z0-9-]*$ ]]; then
     exit 1
 fi
 
-profile="$profile_dir/$desktop.sh"
+profile_desktop="$desktop"
+case "$desktop" in
+    hyprland|mango|denial) profile_desktop="niri" ;;
+esac
+profile="$profile_dir/$profile_desktop.sh"
 if [[ ! -x "$profile" ]]; then
     echo "桌面配置脚本不存在或不可执行：$profile" >&2
     exit 1
 fi
 
 echo "--> 正在安装桌面配置：$desktop"
-exec "$profile"
+DROIDSPACES_DESKTOP="$desktop" exec "$profile" install

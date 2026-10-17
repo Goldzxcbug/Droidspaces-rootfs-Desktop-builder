@@ -8,7 +8,6 @@ StartLimitBurst=5
 Type=simple
 User=1000
 PAMName=login
-Environment=XDG_SESSION_CLASS=user
 EnvironmentFile=-/etc/environment
 ExecStart=/usr/local/bin/start-desktop-session
 Restart=on-failure

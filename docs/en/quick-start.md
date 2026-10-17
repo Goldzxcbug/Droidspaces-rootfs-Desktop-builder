@@ -32,4 +32,4 @@ The default username is `Gold` and the default password is `1234` (use your cust
 passwd
 ```
 
-`all` and `all-wayland` build multiple compatible targets. GNOME is available on Debian 13, Ubuntu 26, and Arch Linux ARM; Niri is available on Arch Linux ARM only. See the [compatibility matrix](build-options.md).
+`all` and `all-wayland` build multiple compatible targets. GNOME, Niri, Hyprland, Mango, and Denial are available on Debian 13, Ubuntu 26, Fedora 43/44, and Arch Linux ARM. See the [compatibility matrix](build-options.md).

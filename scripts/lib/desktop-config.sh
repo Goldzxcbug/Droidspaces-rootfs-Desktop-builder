@@ -8,6 +8,9 @@ desktop_normalize() {
         GNOME|gnome) printf '%s\n' gnome ;;
         'Anland Next'|anland-next) printf '%s\n' anland-next ;;
         Niri|niri) printf '%s\n' niri ;;
+        Hyprland|hyprland) printf '%s\n' hyprland ;;
+        Mango|mango) printf '%s\n' mango ;;
+        Denial|denial) printf '%s\n' denial ;;
         *) return 1 ;;
     esac
 }
@@ -20,6 +23,9 @@ desktop_label() {
         gnome) printf '%s\n' GNOME ;;
         anland-next) printf '%s\n' 'Anland Next' ;;
         niri) printf '%s\n' Niri ;;
+        hyprland) printf '%s\n' Hyprland ;;
+        mango) printf '%s\n' Mango ;;
+        denial) printf '%s\n' Denial ;;
         *) return 1 ;;
     esac
 }
@@ -61,10 +67,7 @@ desktop_target_supported() {
             esac
             ;;
         gnome)
-            case "$target" in
-                Debian-13|Ubuntu-26|Arch) return 0 ;;
-                *) return 1 ;;
-            esac
+            case "$target" in Debian-13|Ubuntu-26|Fedora-43|Fedora-44|Arch) return 0 ;; *) return 1 ;; esac
             ;;
         anland-next)
             case "$target" in
@@ -72,7 +75,9 @@ desktop_target_supported() {
                 *) return 1 ;;
             esac
             ;;
-        niri) [[ "$target" == Arch ]] ;;
+        niri|hyprland|mango|denial)
+            case "$target" in Debian-13|Ubuntu-26|Fedora-43|Fedora-44|Arch) return 0 ;; *) return 1 ;; esac
+            ;;
         *) return 1 ;;
     esac
 }
@@ -84,7 +89,13 @@ desktop_backend_supported() {
 
     desktop_target_supported "$target" "$desktop" || return 1
     case "$desktop:$backend" in
-        none:x11|kde:x11) return 0 ;;
+        none:x11) return 0 ;;
+        kde:x11)
+            case "$target" in
+                Debian-13|Ubuntu-24|Ubuntu-25|Ubuntu-26|Fedora-43|Fedora-44) return 0 ;;
+                *) return 1 ;;
+            esac
+            ;;
         kde:anland-wayland|kde-mobile:anland-wayland)
             case "$target" in
                 Debian-13|Ubuntu-26|Fedora-43|Fedora-44|Arch) return 0 ;;
@@ -92,10 +103,7 @@ desktop_backend_supported() {
             esac
             ;;
         gnome:anland-wayland)
-            case "$target" in
-                Debian-13|Ubuntu-26|Arch) return 0 ;;
-                *) return 1 ;;
-            esac
+            case "$target" in Debian-13|Ubuntu-26|Fedora-43|Fedora-44|Arch) return 0 ;; *) return 1 ;; esac
             ;;
         anland-next:anland-wayland)
             case "$target" in
@@ -103,7 +111,9 @@ desktop_backend_supported() {
                 *) return 1 ;;
             esac
             ;;
-        niri:anland-wayland) [[ "$target" == Arch ]] ;;
+        niri:anland-wayland|hyprland:anland-wayland|mango:anland-wayland|denial:anland-wayland)
+            case "$target" in Debian-13|Ubuntu-26|Fedora-43|Fedora-44|Arch) return 0 ;; *) return 1 ;; esac
+            ;;
         *) return 1 ;;
     esac
 }
@@ -113,11 +123,8 @@ desktop_wayland_targets_json() {
         kde|kde-mobile|anland-next)
             printf '%s\n' '["Debian-13","Ubuntu-26","Fedora-43","Fedora-44","Arch"]'
             ;;
-        gnome)
-            printf '%s\n' '["Debian-13","Ubuntu-26","Arch"]'
-            ;;
-        niri)
-            printf '%s\n' '["Arch"]'
+        gnome|niri|hyprland|mango|denial)
+            printf '%s\n' '["Debian-13","Ubuntu-26","Fedora-43","Fedora-44","Arch"]'
             ;;
         *) return 1 ;;
     esac

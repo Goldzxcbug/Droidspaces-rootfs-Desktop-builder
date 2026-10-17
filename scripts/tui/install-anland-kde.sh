@@ -27,6 +27,7 @@ readonly DESKTOP_CONFIG="${DROIDSPACES_DESKTOP_CONFIG:-/etc/droidspaces-desktop.
 WORK_DIR=""
 PREPARED_WORK_DIR="${ANLAND_KDE_WORK_DIR:-}"
 PREPARED_PACKAGE_DIR="${ANLAND_KDE_PACKAGE_DIR:-}"
+PREPARED_ARCHIVE_NAME="${ANLAND_KDE_ARCHIVE_NAME:-}"
 UI_LANG="en"
 TARGET=""
 PACKAGE_TYPE=""
@@ -206,21 +207,31 @@ uninstall_kde_deb() {
 }
 
 uninstall_kde_rpm() {
-    local dnf_conf="/etc/dnf/dnf.conf" backup stripped
+    local dnf_conf="/etc/dnf/dnf.conf" backup stripped transaction
+    local -a packages=()
     command -v dnf >/dev/null 2>&1 || die "未找到 dnf。" "dnf was not found."
+    command -v rpm >/dev/null 2>&1 || die "未找到 rpm。" "rpm was not found."
     [[ -f "$dnf_conf" ]] || die "找不到 DNF 配置。" "The DNF configuration was not found."
+    mapfile -t packages < <(rpm -qa --queryformat '%{NAME}\n' |
+        awk '/^kwin([a-zA-Z0-9+._-]*)$/ || /^xorg-x11-server-Xwayland([a-zA-Z0-9+._-]*)$/' | sort -u)
+    ((${#packages[@]})) || {
+        rm -f -- "$COMPONENT_STATE_DIR/kde.version"
+        return 0
+    }
     backup="$(mktemp -t anland-kde-uninstall.XXXXXXXX)"
     stripped="$(mktemp -t anland-kde-uninstall.XXXXXXXX)"
+    transaction="$(mktemp -t anland-kde-uninstall.XXXXXXXX)"
     cp -p -- "$dnf_conf" "$backup"
     if ! rewrite_dnf_config_without_managed_block "$dnf_conf" "$stripped" || \
-        ! install -m 0644 "$stripped" "$dnf_conf" || \
-        ! dnf distro-sync -y --exclude='mesa*' --exclude='systemd*' \
-            'kwin*' 'xorg-x11-server-Xwayland*'; then
+        ! rewrite_dnf_config_for_package_install "$stripped" "$transaction" || \
+        ! install -m 0644 "$transaction" "$dnf_conf" || \
+        ! dnf distro-sync -y --exclude='mesa*' --exclude='systemd*' "${packages[@]}" || \
+        ! dnf reinstall -y --exclude='mesa*' --exclude='systemd*' "${packages[@]}"; then
         install -m 0644 "$backup" "$dnf_conf" || true
-        rm -f -- "$backup" "$stripped"
+        rm -f -- "$backup" "$stripped" "$transaction"
         die "恢复发行版 KWin/Xwayland 失败。" "Failed to restore distribution KWin/Xwayland packages."
     fi
-    rm -f -- "$backup" "$stripped" "$COMPONENT_STATE_DIR/kde.version"
+    rm -f -- "$backup" "$stripped" "$transaction" "$COMPONENT_STATE_DIR/kde.version"
 }
 
 uninstall_kde_arch() {
@@ -301,6 +312,7 @@ require_root() {
         "ANLAND_KDE_RELEASE_TAG=$RELEASE_TAG" \
         "ANLAND_KDE_WORK_DIR=$WORK_DIR" \
         "ANLAND_KDE_PACKAGE_DIR=$PACKAGE_DIR" \
+        "ANLAND_KDE_ARCHIVE_NAME=$ARCHIVE_NAME" \
         "DROIDSPACES_DESKTOP_CONFIG=$DESKTOP_CONFIG" \
         bash "$script_path" "$@"; then
         status=0
@@ -891,6 +903,10 @@ use_prepared_packages() {
 
     WORK_DIR="$prepared_work_dir"
     PACKAGE_DIR="$prepared_package_dir"
+    ARCHIVE_NAME="$PREPARED_ARCHIVE_NAME"
+    case "$ARCHIVE_NAME" in "${ARCHIVE_PREFIX}"*"${ARCHIVE_SUFFIX}") ;; *)
+        die "预下载包名与系统不匹配。" "The pre-downloaded archive name does not match this system." ;;
+    esac
     has_packages "$PACKAGE_DIR" || die "预下载目录中没有可安装的软件包。" "The pre-downloaded directory has no installable packages."
     validate_package_architecture || \
         die "预下载包中的软件包架构与当前系统不匹配。" "The pre-downloaded package architecture does not match this system."
@@ -1203,7 +1219,8 @@ configure_dnf_excludes() {
 }
 
 install_rpm_packages() {
-    local -a files packages dnf_install_options=()
+    local -a files packages dnf_install_options=() install_files=() reinstall_files=()
+    local file package_name package_version installed_version
     local dnf_conf="/etc/dnf/dnf.conf"
     local dnf_backup
 
@@ -1211,6 +1228,17 @@ install_rpm_packages() {
     command -v rpm >/dev/null 2>&1 || die "未找到 rpm。" "rpm was not found."
     mapfile -t files < <(find "$PACKAGE_DIR" -maxdepth 1 -type f -name '*.rpm' -print | sort)
     ((${#files[@]} > 0)) || die "没有可安装的 rpm 包。" "No installable rpm packages were found."
+
+    for file in "${files[@]}"; do
+        package_name="$(rpm -qp --queryformat '%{NAME}' "$file")"
+        package_version="$(rpm -qp --queryformat '%{EPOCHNUM}:%{VERSION}-%{RELEASE}' "$file")"
+        installed_version="$(rpm -q --queryformat '%{EPOCHNUM}:%{VERSION}-%{RELEASE}' "$package_name" 2>/dev/null || true)"
+        if [[ "$installed_version" == "$package_version" ]]; then
+            reinstall_files+=("$file")
+        else
+            install_files+=("$file")
+        fi
+    done
 
     log "正在安装 ${#files[@]} 个 rpm 包并自动处理依赖..." \
         "Installing ${#files[@]} rpm packages and resolving dependencies..."
@@ -1224,7 +1252,8 @@ install_rpm_packages() {
         dnf_install_options+=('--exclude=systemd*')
     fi
     if ! remove_managed_dnf_excludes "$dnf_conf" || \
-        ! dnf install -y "${dnf_install_options[@]}" "${files[@]}"; then
+        ! { ((${#install_files[@]} == 0)) || dnf --nogpgcheck install -y "${dnf_install_options[@]}" "${install_files[@]}"; } || \
+        ! { ((${#reinstall_files[@]} == 0)) || dnf --nogpgcheck reinstall -y "${dnf_install_options[@]}" "${reinstall_files[@]}"; }; then
         install -m 0644 "$dnf_backup" "$dnf_conf" || true
         rm -f -- "$dnf_backup"
         die "rpm 软件包安装失败。" "RPM package installation failed."

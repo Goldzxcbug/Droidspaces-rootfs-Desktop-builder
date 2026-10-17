@@ -17,6 +17,9 @@ case "${DESKTOP:-}:${DISPLAY_BACKEND:-}" in
     # systemd 用户管理器不可用时它只告警继续，所以不需要用户级单元先起来。
     anland-next:anland-wayland) command_line='exec /usr/bin/anland-session' ;;
     niri:anland-wayland) command_line='exec /usr/bin/niri-anland' ;;
+    hyprland:anland-wayland) command_line='exec /usr/bin/hyprland-anland' ;;
+    mango:anland-wayland) command_line='exec /usr/bin/mango-anland' ;;
+    denial:anland-wayland) command_line='exec /usr/bin/denial-anland' ;;
     *)
         echo "不支持的桌面会话：${DESKTOP:-未设置}/${DISPLAY_BACKEND:-未设置}" >&2
         exit 1

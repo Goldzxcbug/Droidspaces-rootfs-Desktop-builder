@@ -45,7 +45,7 @@ done
 : "${ANLAND_PACKAGE_REVISION:=}"
 
 if ! DESKTOP="$(desktop_normalize "${DESKTOP_INPUT:-}")"; then
-  echo "错误：-K 只支持 none、KDE、'KDE mobile'、GNOME 或 'Anland Next'。" >&2
+  echo "错误：-K 桌面名称无效。" >&2
   exit 1
 fi
 if [[ -n "${LEGACY_ANLAND_INPUT:-}" ]]; then
@@ -82,7 +82,8 @@ case "$ENABLE_systemd257" in
   *) echo "错误：-S 只支持 true 或 false。" >&2; exit 1 ;;
 esac
 
-if [[ "$DESKTOP" == kde-mobile || "$DESKTOP" == gnome || "$DESKTOP" == anland-next || "$DESKTOP" == niri ]]; then
+if [[ "$DESKTOP" == kde-mobile || "$DESKTOP" == gnome || "$DESKTOP" == anland-next || \
+      "$DESKTOP" == niri || "$DESKTOP" == hyprland || "$DESKTOP" == mango || "$DESKTOP" == denial ]]; then
   DISPLAY_BACKEND="anland-wayland"
 fi
 if [[ "$DISPLAY_BACKEND" == anland-wayland ]]; then
@@ -201,7 +202,7 @@ docker buildx build \
 
 echo "正在写入推荐配置并压缩构建产物..."
 package_rootfs_with_config "$TEMP_TAR" "$FINAL_NAME" "$DESKTOP" "$DISPLAY_BACKEND" \
-  "${PulseAudio:-none}" "${ENABLE_docker:-false}" "${ENABLE_mesa:-false}"
+  "${PulseAudio:-none}" "${ENABLE_docker:-false}" "${ENABLE_mesa:-false}" "${ENABLE_zh_tz:-false}"
 
 echo "========================================================="
 echo " 恭喜！构建成功完成: $FINAL_NAME"

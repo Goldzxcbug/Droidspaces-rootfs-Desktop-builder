@@ -10,6 +10,9 @@ case "$desktop" in
     gnome) installer="/usr/local/sbin/install-anland-gnome" ;;
     anland-next) installer="/usr/local/sbin/install-anland-next" ;;
     niri) installer="/usr/local/sbin/install-anland-niri" ;;
+    hyprland) installer="/usr/local/sbin/install-anland-hyprland" ;;
+    mango) installer="/usr/local/sbin/install-anland-mango" ;;
+    denial) installer="/usr/local/sbin/install-anland-denial" ;;
     *)
         echo "桌面 $desktop 没有 Anland 软件包安装器。" >&2
         exit 1

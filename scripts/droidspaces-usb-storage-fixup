@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+#
+# droidspaces-usb-storage-fixup
+#
+# Make USB mass-storage devices usable inside a Droidspaces container.
+#
+# Why this is needed
+# ------------------
+# Inside a Droidspaces container /dev only contains the nodes that already
+# existed when the container started.  Block devices that show up later -- every
+# USB stick and, in particular, the Hasselblad X2D's two g_mass_storage LUNs
+# (internal 950 GB SSD + SD slot) -- never get a device node, because these
+# disks are registered with a dynamic dev_t and neither devtmpfs nor
+# systemd-udevd creates the node here.  Without /dev/sdX nothing can open,
+# probe or mount the device, which is what usb-manager and Dolphin hit.
+#
+# The X2D adds a second wrinkle: its LUNs are enumerated with *no medium*.
+# The camera attaches the real backing store only after "mass storage" is
+# confirmed on its screen, and the SCSI layer refreshes the reported capacity
+# only when somebody opens the device (sd_check_events() -> revalidate_disk()).
+# Since no node existed, nobody ever opened it, the kernel kept reporting 0
+# bytes, and udev/udisks2 therefore never saw a filesystem.
+#
+# What this does
+# --------------
+#  1. create the missing /dev nodes (disk + partitions) for every USB-attached
+#     SCSI disk;
+#  2. open each LUN, which makes the kernel revalidate the media and emit a
+#     change uevent once the camera attaches its storage;
+#  3. re-run udev whenever a node was created or the reported capacity changed,
+#     so that ID_FS_* properties are refreshed and udisks2/Dolphin pick the
+#     volume up.  (udev processes the original "add" event while the node is
+#     still missing, so its blkid probe fails and it clears the filesystem
+#     properties again -- hence this explicit re-run.)
+#
+# This helper never writes to any filesystem and never touches the camera; it
+# only creates device nodes and issues ioctls.
+#
+# Reversible: remove /etc/udev/rules.d/85-droidspaces-usb-storage.rules,
+# /etc/systemd/system/droidspaces-usb-storage-fixup.service,
+# /usr/local/sbin/droidspaces-usb-storage-fixup and
+# /usr/local/sbin/droidspaces-usb-storage-cleanup, then delete the created
+# /dev/sdX nodes.
+#
+set -u
+
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+# The camera's on-screen confirmation can take a while; keep watching (with a
+# backoff) so a late "mass storage" answer is still picked up.
+POLL_INTERVAL=3
+POLL_SLOW_INTERVAL=15
+POLL_SLOW_AFTER=30
+POLL_TIMEOUT=600
+
+log() { printf 'droidspaces-usb-storage-fixup: %s\n' "$*"; }
+
+# Print /sys/block/sdX device names of USB-attached SCSI disks (no partitions).
+usb_disks() {
+    local path dev real
+    for path in /sys/block/sd*; do
+        [ -d "$path" ] || continue
+        dev=${path##*/}
+        case "$dev" in *[!0-9]*) ;; *) continue ;; esac
+        real=$(readlink -f "$path" 2>/dev/null) || continue
+        # require a real "usbN" bus component so internal UFS/eMMC disks and the
+        # SoC's "a600000.ssusb" controller node are not matched
+        case "$real" in */usb[0-9]*/*) ;; *) continue ;; esac
+        printf '%s\n' "$dev"
+    done
+}
+
+NODE_CREATED=0
+
+# Create /dev/<name> if it is missing or points at the wrong device number.
+# $1: sysfs path of a block device (disk or partition)
+ensure_node() {
+    local path=$1 name major minor want have
+    name=${path##*/}
+    IFS=: read -r major minor < "$path/dev" 2>/dev/null || return 1
+    [ -n "${major:-}" ] && [ -n "${minor:-}" ] || return 1
+    want=$(printf '%x:%x' "$major" "$minor")
+    have=$(stat -c '%t:%T' "/dev/$name" 2>/dev/null || true)
+    if [ "$have" != "$want" ]; then
+        [ -e "/dev/$name" ] && rm -f "/dev/$name"
+        mknod "/dev/$name" b "$major" "$minor" || return 1
+        NODE_CREATED=1
+        log "created /dev/$name ($major:$minor)"
+    fi
+    chown root:disk "/dev/$name" 2>/dev/null
+    chmod 0660 "/dev/$name" 2>/dev/null
+    return 0
+}
+
+main() {
+    local start=$(( $(date +%s) ))
+    local deadline=$(( start + POLL_TIMEOUT ))
+    local interval=$POLL_INTERVAL
+    local disk part size pending last created
+    declare -A seen=()
+
+    while :; do
+        [ -n "$(usb_disks)" ] || { log "no USB storage device left, exiting"; return 0; }
+        pending=0
+
+        for disk in $(usb_disks); do
+            NODE_CREATED=0
+            ensure_node "/sys/block/$disk" || true
+            for part in /sys/block/"$disk"/"$disk"[0-9]*; do
+                [ -d "$part" ] || continue
+                ensure_node "$part" || true
+            done
+            created=$NODE_CREATED
+
+            # Opening the device triggers sd_check_events() -> revalidate_disk(),
+            # which is what makes the camera's late-attached medium visible.
+            size=$(blockdev --getsize64 "/dev/$disk" 2>/dev/null || echo 0)
+
+            last=${seen[$disk]:-unset}
+            if [ "$created" -eq 1 ] || [ "$last" != "$size" ]; then
+                seen[$disk]=$size
+                udevadm trigger --action=change --settle "/sys/block/$disk" >/dev/null 2>&1
+                log "/dev/$disk: capacity $size bytes, asked udev to re-read it"
+            fi
+
+            # A mount of a medium-less device is a leftover from a previous
+            # attach.  Release it: while it exists the kernel block device stays
+            # claimed, Android vold's fsck on the next attach fails, and Android
+            # then offers to *format* the camera's storage.
+            if [ "${size:-0}" -eq 0 ] 2>/dev/null; then
+                /usr/local/sbin/droidspaces-usb-storage-cleanup "$disk" >/dev/null 2>&1 || true
+            fi
+
+            [ "${size:-0}" -eq 0 ] 2>/dev/null && pending=1
+        done
+
+        [ "$pending" -eq 0 ] && { log "all USB LUNs report media, exiting"; return 0; }
+        [ "$(date +%s)" -ge "$deadline" ] && { log "giving up after ${POLL_TIMEOUT}s"; return 0; }
+        [ "$(( $(date +%s) - start ))" -ge "$POLL_SLOW_AFTER" ] && interval=$POLL_SLOW_INTERVAL
+        sleep "$interval"
+    done
+}
+
+main "$@"

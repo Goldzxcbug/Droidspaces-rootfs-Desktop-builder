@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Release container-side mounts of a USB block device that has just been removed.
+# A leftover mount keeps the kernel block device claimed; Android's vold then
+# cannot run fsck.exfat on the next attach and offers to format the medium.
+# Called from /etc/udev/rules.d/85-droidspaces-usb-storage.rules on "remove".
+set -u
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+dev=${1:-}
+[ -n "$dev" ] || exit 0
+node=/dev/$dev
+for _ in 1 2 3; do
+    targets=$(findmnt -S "$node" -o TARGET -n 2>/dev/null || true)
+    [ -n "$targets" ] || exit 0
+    for mp in $targets; do
+        umount -l "$mp" 2>/dev/null || true
+    done
+    sleep 1
+done
+exit 0

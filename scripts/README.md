@@ -24,6 +24,9 @@
 | `install-anland-desktop.sh` | RootFS 构建环境 | 根据桌面 slug 分发到 KDE、GNOME、Niri、Hyprland、Mango、Denial 或 Anland Next 安装器。 |
 | `lib/anland-build.sh` | RootFS 构建宿主 | 为 native/QEMU 构建统一解析 Anland 包族、Release tag 和 revision。 |
 | `install-usb-manager.sh` | Linux 容器 | 安装 Droidspaces USB Manager、发行版依赖、菜单入口和用户权限。 |
+| `install-usb-storage-access.sh` | RootFS 构建环境 | 配置 USB 大容量存储访问：补齐 `/dev` 节点、重新校验介质、exFAT 权限组与 polkit 放行。 |
+| `droidspaces-usb-storage-fixup` | Linux 容器的 udev | 为 USB 块设备补建设备节点，并在介质后挂载时重新校验，使 udisks2/Dolphin 能看到文件系统。 |
+| `droidspaces-usb-storage-cleanup` | Linux 容器的 udev | 设备拔出时释放容器侧挂载，避免内核块设备一直被占用。 |
 | `systemd257.sh` | RootFS 构建环境 | 在需要时安装由包管理器管控的 systemd 257 完整包族，供旧 Android 内核使用。 |
 | `download-firmware` | Debian/Ubuntu 容器 | 安装并解压 `linux-firmware` 中的 `.zst` 固件。 |
 | `nosnap.sh` | Ubuntu RootFS 构建环境 | 移除 Snap、阻止其重新安装，并配置传统 deb 软件源。 |
@@ -180,6 +183,36 @@ sudo ./scripts/install-usb-manager.sh --user "$USER"
 在普通 Arch 系统上，安装器会照常安装 `systemd` 和其他依赖。若检测到 `/etc/droidspaces-systemd257`，重复运行时会保留 Pacman 的 `IgnorePkg` 锁定，不再把 `systemd` 作为显式安装目标；PyQt5、ADB、NTFS、exFAT 等 USB Manager 依赖仍会正常补齐。
 
 RootFS 导入 Droidspaces 时必须开启硬件访问，否则容器无法看到 `/sys/bus/usb` 和 `/sys/bus/scsi`。
+
+## USB 大容量存储访问配置器
+
+`install-usb-storage-access.sh` 在构建阶段自动执行，让桌面用户能真正访问 USB 大容量存储（U 盘、相机机身存储等）。
+
+```bash
+sudo ./scripts/install-usb-storage-access.sh --user "$USER"
+```
+
+它写入并安装：
+
+- `droidspaces-usb-storage-fixup`、`droidspaces-usb-storage-cleanup` 两个运行时脚本；
+- `/etc/udev/rules.d/85-droidspaces-usb-storage.rules`：块设备 `add` 时启动 helper，`remove` 时释放容器侧挂载；
+- `/etc/systemd/system/droidspaces-usb-storage-fixup.service`；
+- `/etc/polkit-1/rules.d/49-droidspaces-udisks2.rules`：放行本地管理员组挂载可移动介质；
+- `external_storage` 组（gid 1077，对齐 Android 的 `AID_EXTERNAL_STORAGE`）并把 `--user` 指定的用户加入。
+
+必须同时解决三件事 Dolphin 才能用：
+
+1. 容器 `/dev` 只包含启动时已存在的节点。启动后出现的块设备使用动态 dev_t（USB 磁盘、`loop16..46` 等），devtmpfs 与 systemd-udevd 都不为它建节点，于是 `/dev/sdX` 根本不存在，任何程序都无法 open、探测或挂载；
+2. 相机这类设备先以"无介质"枚举，用户在机身上确认后才把真实存储挂到 gadget 上；而内核只有在该设备被 open 时才重新校验容量（`sd_check_events() → revalidate_disk()`）。节点不存在就永远没人 open，容量一直是 0，udev 探测不到文件系统；
+3. Android GKI 的 exFAT 驱动忽略 `uid=`/`gid=`/`umask=`，硬编码 `gid=1077`（`AID_EXTERNAL_STORAGE`）与 `fmask/dmask=0007`，普通用户必须属于该 gid 才能读 exFAT 介质（与 NTFS 侧用 `ntfsusb` gid 1023 是同一类做法）。
+
+`droidspaces-usb-storage-fixup` 只做 `mknod` 建节点和 open 设备读容量，**不写任何文件系统**，轮询带退避、上限 10 分钟；udev 规则只让 `add` 启动 helper（helper 自身会用 `change` 重新触发 udev，否则会无限循环），并在 `remove` 时释放容器侧挂载。
+
+目前只有 `Fedora-44.Dockerfile` 接入（3 行 `COPY` + 1 行 `RUN` + 构建末尾清理项）；其它发行版需要时按同样方式接入即可。
+
+> 安装后需注销重新登录（或重启容器），新组才会进入桌面进程的凭据集合。
+>
+> **⚠️ 不要点 Android 的"格式化"提示**：宿主 Android 的 `vold` 先 `fsck` 再挂载，而 fsck 要求独占块设备——只要容器侧存在内核对 exFAT 的挂载，vold 的 fsck 就会失败，该卷被标记为 `unmountable`，Android 会弹出指向"格式化"的通知。规则因此保证 **vold 先挂载、容器后挂载**，并在拔出时释放块设备；若该通知仍然出现，请忽略或划掉。
 
 ## systemd 257 兼容脚本
 

@@ -72,6 +72,11 @@ RUN chmod +x /usr/local/bin/download-firmware /etc/profile.d/ds-aliases.sh /usr/
     ln -s droidspaces-tui /usr/local/bin/dstui && \
     ln -s droidspaces-tui /usr/local/bin/ds-tui
 
+# Debian 基础镜像默认通过 dpkg path-exclude 跳过 .mo 翻译文件；全局放开，
+# 保证所有桌面 profile 安装的软件带完整语言翻译。
+RUN sed -i 's|^path-exclude=/usr/share/locale/\*/LC_MESSAGES/\*.mo|#&|' \
+        /etc/dpkg/dpkg.cfg.d/excludes 2>/dev/null || true
+
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     # 核心工具组件

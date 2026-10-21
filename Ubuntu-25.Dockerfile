@@ -61,6 +61,11 @@ RUN chmod +x /usr/local/bin/download-firmware /usr/local/sbin/nosnap /etc/profil
     ln -s droidspaces-tui /usr/local/bin/dstui && \
     ln -s droidspaces-tui /usr/local/bin/ds-tui
 
+# Ubuntu 基础镜像默认通过 dpkg path-exclude 跳过 .mo 翻译文件；全局放开，
+# 保证所有桌面 profile 安装的软件带完整语言翻译。
+RUN sed -i 's|^path-exclude=/usr/share/locale/\*/LC_MESSAGES/\*.mo|#&|' \
+        /etc/dpkg/dpkg.cfg.d/excludes 2>/dev/null || true
+
 RUN sed -i 's/Components: main/Components: main restricted universe multiverse/g' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || \
     sed -i 's/main/main restricted universe multiverse/g' /etc/apt/sources.list 2>/dev/null && \
     apt-get update && \

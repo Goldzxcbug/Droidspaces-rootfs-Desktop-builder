@@ -48,8 +48,10 @@ RUN if [ "$DISPLAY_BACKEND" = "anland-wayland" ]; then \
     fi && \
     rm -f /tmp/Anland-Audio.conf
 
-# 加速下载
-RUN echo "max_parallel_downloads=10" >> /etc/dnf/dnf.conf && \
+# Fedora 容器基础镜像默认只解包 en_US 翻译文件，桌面的 zh_CN 翻译会在
+# RPM 安装时被过滤；全局放开全部语言，供所有桌面共用。
+RUN echo '%_install_langs all' > /etc/rpm/macros.image-language-conf && \
+    echo "max_parallel_downloads=10" >> /etc/dnf/dnf.conf && \
     echo "fastestmirror=True" >> /etc/dnf/dnf.conf && \
     echo "defaultyes=True" >> /etc/dnf/dnf.conf
 

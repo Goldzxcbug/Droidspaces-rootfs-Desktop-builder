@@ -63,6 +63,18 @@ on:
         required: false
         type: string
         default: Goldzxcbug/droidspaces-package
+      build_id:
+        required: false
+        type: string
+        default: ''
+      asset_variant:
+        required: false
+        type: string
+        default: ''
+      publish_release:
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   # --------------------------------------------------------
@@ -72,7 +84,7 @@ jobs:
     name: ${{ inputs.ui_language == 'zh' && '准备构建' || 'Setup' }}
     runs-on: ubuntu-latest
     outputs:
-      templates: ${{ steps.find-templates.outputs.templates }}
+      matrix: ${{ steps.find-templates.outputs.matrix }}
       desktop: ${{ steps.find-templates.outputs.desktop }}
       desktop_autostart: ${{ steps.find-templates.outputs.desktop_autostart }}
       display_backend: ${{ steps.find-templates.outputs.display_backend }}
@@ -97,6 +109,7 @@ jobs:
           PULSEAUDIO_INPUT: ${{ inputs.PulseAudio }}
           UI_LANGUAGE: ${{ inputs.ui_language }}
           WAYLAND_PACKAGE_REPOSITORY: ${{ inputs.wayland_package_repository }}
+          PUBLISH_ALL_WAYLAND: ${{ inputs.desktop == 'all-wayland' }}
         run: |
           set -euo pipefail
           source scripts/lib/desktop-config.sh
@@ -123,10 +136,14 @@ jobs:
           }
 
           TARGET="$BUILD_TARGET_INPUT"
-          DESKTOP="$(desktop_normalize "$DESKTOP_INPUT")" || {
-            fail "无效的桌面环境：$DESKTOP_INPUT" \
-              "Invalid desktop: $DESKTOP_INPUT"
-          }
+          if [ "$PUBLISH_ALL_WAYLAND" = "true" ]; then
+            DESKTOP="all-wayland"
+          else
+            DESKTOP="$(desktop_normalize "$DESKTOP_INPUT")" || {
+              fail "无效的桌面环境：$DESKTOP_INPUT" \
+                "Invalid desktop: $DESKTOP_INPUT"
+            }
+          fi
           if [ "$DESKTOP" = "none" ]; then
             DISPLAY_BACKEND="x11"
           else
@@ -138,6 +155,10 @@ jobs:
           DESKTOP_AUTOSTART="$DESKTOP_AUTOSTART_INPUT"
           PULSE_AUDIO="$PULSEAUDIO_INPUT"
 
+          if [ "$ENABLE_SYSTEMD257_INPUT" = "true" ] && [ "$TARGET" = "all-wayland" ]; then
+            fail "all-wayland 构建不支持 systemd 257 兼容选项。" \
+              "all-wayland builds do not support the systemd 257 compatibility option."
+          fi
           if [ "$ENABLE_SYSTEMD257_INPUT" = "true" ]; then
             case "$DESKTOP" in
               kde)
@@ -180,51 +201,61 @@ jobs:
               "Desktop auto-start cannot be enabled when desktop is none."
           fi
 
-          case "$TARGET" in
-            all)
-              TEMPLATES="$({
-                for dockerfile in *.Dockerfile; do
-                  candidate="${dockerfile%.Dockerfile}"
+          MATRIX_FILE="$RUNNER_TEMP/rootfs-matrix.tsv"
+          : > "$MATRIX_FILE"
+          if [ "$DESKTOP" = "all-wayland" ]; then
+            [ "$TARGET" = "all-wayland" ] || fail \
+              "完整 Wayland 桌面矩阵必须使用 all-wayland 构建目标。" \
+              "The full Wayland desktop matrix requires the all-wayland target."
+            DISPLAY_BACKEND="anland-wayland"
+            while IFS= read -r desktop; do
+              while IFS= read -r candidate; do
+                printf '%s\t%s\n' "$candidate" "$desktop" >> "$MATRIX_FILE"
+              done < <(desktop_wayland_targets_json "$desktop" | jq -r '.[]')
+            done < <(printf '%s\n' kde kde-mobile gnome anland-next niri hyprland mango denial)
+          else
+            case "$TARGET" in
+              all)
+                while IFS= read -r candidate; do
                   if desktop_backend_supported "$candidate" "$DESKTOP" "$DISPLAY_BACKEND"; then
-                    printf '%s\n' "$candidate"
+                    printf '%s\t%s\n' "$candidate" "$DESKTOP" >> "$MATRIX_FILE"
                   fi
-                done
-              } | sort | jq -R -s -c 'split("\n")[:-1]')"
-              ;;
-            all-wayland)
-              [ "$DESKTOP" != "none" ] || {
-                fail "all-wayland 需要选择一个桌面环境。" \
+                done < <(for dockerfile in *.Dockerfile; do basename "${dockerfile%.Dockerfile}"; done | sort)
+                ;;
+              all-wayland)
+                [ "$DESKTOP" != "none" ] || fail \
+                  "all-wayland 需要选择一个桌面环境。" \
                   "all-wayland requires a desktop profile."
-              }
-              DISPLAY_BACKEND="anland-wayland"
-              TEMPLATES="$(desktop_wayland_targets_json "$DESKTOP")"
-              ;;
-            *)
-              target_is_known "$TARGET" || {
-                fail "未知的构建目标：$TARGET" \
+                DISPLAY_BACKEND="anland-wayland"
+                while IFS= read -r candidate; do
+                  printf '%s\t%s\n' "$candidate" "$DESKTOP" >> "$MATRIX_FILE"
+                done < <(desktop_wayland_targets_json "$DESKTOP" | jq -r '.[]')
+                ;;
+              *)
+                target_is_known "$TARGET" || fail \
+                  "未知的构建目标：$TARGET" \
                   "Unknown build target: $TARGET"
-              }
-              desktop_backend_supported "$TARGET" "$DESKTOP" "$DISPLAY_BACKEND" || {
-                fail "不支持的发行版、桌面和显示后端组合：$TARGET/$DESKTOP/$DISPLAY_BACKEND" \
+                desktop_backend_supported "$TARGET" "$DESKTOP" "$DISPLAY_BACKEND" || fail \
+                  "不支持的发行版、桌面和显示后端组合：$TARGET/$DESKTOP/$DISPLAY_BACKEND" \
                   "Unsupported target/profile/backend: $TARGET/$DESKTOP/$DISPLAY_BACKEND"
-              }
-              TEMPLATES="$(jq -n -c --arg t "$TARGET" '[$t]')"
-              ;;
-          esac
+                printf '%s\t%s\n' "$TARGET" "$DESKTOP" >> "$MATRIX_FILE"
+                ;;
+            esac
+          fi
 
-          [ "$TEMPLATES" != "[]" ] || {
-            fail "没有发行版支持 $DESKTOP/$DISPLAY_BACKEND。" \
-              "No target supports $DESKTOP/$DISPLAY_BACKEND."
-          }
+          MATRIX="$(jq -c -Rn '[inputs | split("\t") | {template: .[0], desktop: .[1]}]' < "$MATRIX_FILE")"
+          [ "$MATRIX" != "[]" ] || fail \
+            "没有发行版支持 $DESKTOP/$DISPLAY_BACKEND。" \
+            "No target supports $DESKTOP/$DISPLAY_BACKEND."
           if [ "$DISPLAY_BACKEND" = "anland-wayland" ]; then
             PULSE_AUDIO="none"
           fi
-          echo "templates=$TEMPLATES" >> "$GITHUB_OUTPUT"
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
           echo "desktop=$DESKTOP" >> "$GITHUB_OUTPUT"
           echo "desktop_autostart=$DESKTOP_AUTOSTART" >> "$GITHUB_OUTPUT"
           echo "display_backend=$DISPLAY_BACKEND" >> "$GITHUB_OUTPUT"
           echo "pulseaudio_effective=$PULSE_AUDIO" >> "$GITHUB_OUTPUT"
-          message "最终构建矩阵：$TEMPLATES" "Final decided build matrix: $TEMPLATES"
+          message "最终构建矩阵：$MATRIX" "Final decided build matrix: $MATRIX"
           message "桌面环境：$DESKTOP" "Desktop profile: $DESKTOP"
           message "桌面开机自启动：$DESKTOP_AUTOSTART" \
             "Desktop auto-start: $DESKTOP_AUTOSTART"
@@ -238,9 +269,10 @@ jobs:
         id: prep
         env:
           UI_LANGUAGE: ${{ inputs.ui_language }}
+          BUILD_ID_INPUT: ${{ inputs.build_id }}
         run: |
           BUILD_DATE=$(date +'%Y-%m-%d %H:%M:%S')
-          BUILD_ID="v$(date +'%Y%m%d-%H%M%S')"
+          BUILD_ID="${BUILD_ID_INPUT:-v$(date +'%Y%m%d-%H%M%S')}"
           echo "build_date=$BUILD_DATE" >> "$GITHUB_OUTPUT"
           echo "build_id=$BUILD_ID" >> "$GITHUB_OUTPUT"
           if [ "$UI_LANGUAGE" = zh ]; then
@@ -253,21 +285,21 @@ jobs:
   # Phase 2: build (Build of regular Linux distribution RootFS)
   # --------------------------------------------------------
   build:
-    name: ${{ inputs.ui_language == 'zh' && format('构建 {0}', matrix.template) || format('Build {0}', matrix.template) }}
+    name: ${{ inputs.ui_language == 'zh' && format('构建 {0}/{1}', matrix.template, matrix.desktop) || format('Build {0}/{1}', matrix.template, matrix.desktop) }}
     needs: setup
-    if: ${{ needs.setup.outputs.templates != '[]' }}
+    if: ${{ needs.setup.outputs.matrix != '[]' }}
     runs-on: ubuntu-24.04-arm
     strategy:
       fail-fast: false
       matrix:
-        template: ${{ fromJson(needs.setup.outputs.templates) }}
+        include: ${{ fromJson(needs.setup.outputs.matrix) }}
     steps:
       - name: ${{ inputs.ui_language == 'zh' && '检出仓库' || 'Checkout repository' }}
         uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
 
-      - name: ${{ inputs.ui_language == 'zh' && format('构建根文件系统（{0}）', matrix.template) || format('Build RootFS ({0})', matrix.template) }}
+      - name: ${{ inputs.ui_language == 'zh' && format('构建根文件系统（{0}/{1}）', matrix.template, matrix.desktop) || format('Build RootFS ({0}/{1})', matrix.template, matrix.desktop) }}
         env:
           ANLAND_RELEASE_REPOSITORY: ${{ inputs.wayland_package_repository }}
           CUSTOM_USERNAME: ${{ inputs.custom_username }}
@@ -275,8 +307,8 @@ jobs:
           chmod +x build_rootfs-native.sh
           ./build_rootfs-native.sh \
             -i "${{ matrix.template }}.Dockerfile" \
-            -v "${{ needs.setup.outputs.build_id }}" \
-            -K "${{ needs.setup.outputs.desktop }}" \
+            -v "${{ needs.setup.outputs.build_id }}${{ inputs.asset_variant != '' && format('-{0}', inputs.asset_variant) || '' }}" \
+            -K "${{ matrix.desktop }}" \
             -L "${{ needs.setup.outputs.desktop_autostart }}" \
             -B "${{ needs.setup.outputs.display_backend }}" \
             -P "${{ needs.setup.outputs.pulseaudio_effective }}" \
@@ -296,7 +328,7 @@ jobs:
       - name: ${{ inputs.ui_language == 'zh' && '上传构建产物' || 'Upload build artifacts' }}
         uses: actions/upload-artifact@v6
         with:
-          name: ${{ matrix.template }}-${{ needs.setup.outputs.desktop }}-rootfs
+          name: ${{ matrix.template }}-${{ matrix.desktop }}-${{ inputs.asset_variant }}-rootfs
           path: "*.tar.xz"
           retention-days: 1
 
@@ -306,7 +338,7 @@ jobs:
   release:
     name: ${{ inputs.ui_language == 'zh' && '发布构建结果' || 'Publish build results' }}
     needs: [setup, build]
-    if: ${{ !cancelled() && needs.setup.result == 'success' && needs.build.result == 'success' }}
+    if: ${{ inputs.publish_release && !cancelled() && needs.setup.result == 'success' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -2,6 +2,10 @@
 
 # Quick Start
 
+## Subscribe to the rolling desktop feed
+
+In Droidspaces repository management, add [Chinese RootFS (GitHub)](https://github.com/Goldzxcbug/Droidspaces-rootfs-Desktop-builder/releases/download/droidspaces-rootfs-all-wayland/rootfs_zh.json), [Chinese RootFS (CNB)](https://cnb.cool/goldzxcbug/droidspaces-package/-/releases/download/droidspaces-rootfs-all-wayland/rootfs_zh.json), or [English RootFS (GitHub)](https://github.com/Goldzxcbug/Droidspaces-rootfs-Desktop-builder/releases/download/droidspaces-rootfs-all-wayland/rootfs_en.json). Each Chinese index uses download URLs from its own source. The rolling release updates weekly and includes every Anland Wayland desktop for Debian 13, Ubuntu 26, Fedora 43/44, and Arch.
+
 ## 1. Build with GitHub Actions
 
 1. Fork this repository and open its `Actions` page.

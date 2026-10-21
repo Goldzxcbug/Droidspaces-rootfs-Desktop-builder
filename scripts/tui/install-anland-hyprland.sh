@@ -1025,7 +1025,7 @@ install_deb_packages() {
         fi
         apt-get update
         apt-get install -y --no-install-recommends -t trixie-backports \
-            libhyprcursor0 libhyprwire3 libudis86-0 libxkbcommon0
+            libhyprcursor0 libhyprwire3 libudis86-0 libxkbcommon0 hyprlauncher
     fi
 
     log "正在安装 ${#files[@]} 个 deb 包并自动处理依赖..." \

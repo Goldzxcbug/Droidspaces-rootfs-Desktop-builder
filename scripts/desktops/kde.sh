@@ -42,9 +42,6 @@ configure_environment() {
 }
 
 install_apt() {
-    sed -i 's|^path-exclude=/usr/share/locale/\*/LC_MESSAGES/\*.mo|#&|' \
-        /etc/dpkg/dpkg.cfg.d/excludes 2>/dev/null || true
-
     case "$ID:$VERSION_ID" in
         debian:13)
             apt-get install -y --no-install-recommends \
@@ -84,7 +81,6 @@ install_fedora() {
         *) echo "KDE 不支持 Fedora $VERSION_ID" >&2; return 1 ;;
     esac
 
-    echo '%_install_langs all' > /etc/rpm/macros.image-language-conf
     dnf install -y --setopt=install_weak_deps=False \
         dbus-x11 xrandr xset xrdb xhost google-noto-cjk-fonts google-noto-emoji-color-fonts plasma-desktop pipewire pipewire-alsa pipewire-pulseaudio wireplumber powerdevil kscreen plasma-pa ark kwin upower konsole \
         dolphin kate kinfocenter glx-utils pulseaudio-utils vulkan-tools fedora-logos aha clinfo dmidecode libdisplay-info wayland-utils xorg-x11-server-Xorg \

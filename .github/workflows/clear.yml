@@ -88,8 +88,8 @@ jobs:
           INDEX=0
 
           while IFS=$'\t' read -r ID TAG DRAFT; do
-            if [ "$TAG" = "anland-kde-packages" ]; then
-              echo "保留旧版 RootFS 兼容 Release: $TAG"
+            if [ "$TAG" = "droidspaces-rootfs-all-wayland" ]; then
+              echo "保留固定 RootFS Release: $TAG"
               continue
             fi
             if [ "$DRAFT" = "true" ]; then

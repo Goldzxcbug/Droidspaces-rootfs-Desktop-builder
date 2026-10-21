@@ -8,6 +8,8 @@
 
 **快速开始：** Fork 仓库 → 打开 `Actions` → 运行“编译并发布 Droidspaces RootFS” → 从 `Releases` 下载 RootFS。
 
+固定全桌面订阅源：在 Droidspaces 的 RootFS 仓库管理中添加 [中文 RootFS（GitHub）](https://github.com/Goldzxcbug/Droidspaces-rootfs-Desktop-builder/releases/download/droidspaces-rootfs-all-wayland/rootfs_zh.json)、[中文 RootFS（CNB）](https://cnb.cool/goldzxcbug/droidspaces-package/-/releases/download/droidspaces-rootfs-all-wayland/rootfs_zh.json) 或 [English RootFS（GitHub）](https://github.com/Goldzxcbug/Droidspaces-rootfs-Desktop-builder/releases/download/droidspaces-rootfs-all-wayland/rootfs_en.json)。
+
 ## 项目内容
 
 - 七种发行版构建目标，支持 X11 与 Anland Wayland（依桌面和发行版而定）。

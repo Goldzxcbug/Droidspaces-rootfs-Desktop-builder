@@ -32,7 +32,7 @@ startplasma-x11
 
 Anland Wayland supports Debian 13, Ubuntu 26, Fedora 43/44, and Arch. Arch KDE uses Anland Wayland only. KDE uses patched KWin/Xwayland; GNOME uses patched Mutter and installs a full desktop with common applications. Niri, Hyprland, Mango, and Denial include a lightweight session, terminal, XDG portal, audio, and fonts for users to extend. Their ARM64 packages are published by [`droidspaces-package`](https://github.com/Goldzxcbug/droidspaces-package) and installed from the matching Release during RootFS creation.
 
-The lightweight compositor profile writes the session and Anland/Mesa environment to `/etc/environment`, like the other desktop profiles. The shared desktop launcher runs each packaged compositor command directly without a session wrapper.
+Each lightweight compositor has its own `desktops/<slug>.sh` profile; the profile writes the session and Anland/Mesa environment to `/etc/environment`, like the other desktop profiles. The shared desktop launcher runs each packaged compositor command directly without a session wrapper.
 
 Prepare the Android device:
 

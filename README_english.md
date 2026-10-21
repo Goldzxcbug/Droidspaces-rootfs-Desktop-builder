@@ -8,6 +8,8 @@ Build ARM64 Linux RootFS images for Droidspaces on Android with GitHub Actions. 
 
 **Quick start:** Fork this repository → open `Actions` → run “Build and Release Droidspaces RootFS” → download the RootFS from `Releases`.
 
+Subscribe to the rolling desktop feed in Droidspaces: [Chinese RootFS (GitHub)](https://github.com/Goldzxcbug/Droidspaces-rootfs-Desktop-builder/releases/download/droidspaces-rootfs-all-wayland/rootfs_zh.json), [Chinese RootFS (CNB)](https://cnb.cool/goldzxcbug/droidspaces-package/-/releases/download/droidspaces-rootfs-all-wayland/rootfs_zh.json), or [English RootFS (GitHub)](https://github.com/Goldzxcbug/Droidspaces-rootfs-Desktop-builder/releases/download/droidspaces-rootfs-all-wayland/rootfs_en.json).
+
 ## What it provides
 
 - Seven distribution targets, with X11 and Anland Wayland support depending on the selected profile and distribution.

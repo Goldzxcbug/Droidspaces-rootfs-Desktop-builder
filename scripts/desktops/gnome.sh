@@ -49,9 +49,6 @@ install_apt() {
         libcanberra-pulse sound-theme-freedesktop
     )
 
-    sed -i 's|^path-exclude=/usr/share/locale/\*/LC_MESSAGES/\*.mo|#&|' \
-        /etc/dpkg/dpkg.cfg.d/excludes 2>/dev/null || true
-
     case "$ID:$VERSION_ID" in
         debian:13)
             packages+=(desktop-base gnome firefox-esr gnome-music)

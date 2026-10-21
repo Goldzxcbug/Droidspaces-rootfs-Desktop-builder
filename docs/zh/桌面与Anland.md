@@ -32,7 +32,7 @@ startplasma-x11
 
 Anland Wayland 支持 Debian 13、Ubuntu 26、Fedora 43/44 和 Arch。Arch KDE 仅使用 Anland Wayland；KDE 使用 patched KWin/Xwayland，GNOME 使用 patched Mutter。GNOME 在这些发行版上安装完整桌面和基础应用。Niri、Hyprland、Mango、Denial 提供轻量会话、终端、XDG portal、音频和字体，用户可自行添加桌面应用。它们的 ARM64 包由 [`droidspaces-package`](https://github.com/Goldzxcbug/droidspaces-package) 发布，RootFS 构建时从对应 Release 安装。
 
-轻量 compositor profile 会将会话与 Anland/Mesa 环境写入 `/etc/environment`。统一桌面启动入口直接运行包提供的 compositor 命令，不使用 `--session`。
+轻量 compositor 各自使用独立的 `desktops/<slug>.sh` profile；profile 会将会话与 Anland/Mesa 环境写入 `/etc/environment`。统一桌面启动入口直接运行包提供的 compositor 命令，不使用 `--session`。
 
 在 Android 设备上完成以下准备：
 

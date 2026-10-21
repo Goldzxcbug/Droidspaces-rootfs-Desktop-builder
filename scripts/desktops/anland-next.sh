@@ -42,9 +42,6 @@ configure_environment() {
 
 
 install_apt() {
-    sed -i 's|^path-exclude=/usr/share/locale/\*/LC_MESSAGES/\*.mo|#&|' \
-        /etc/dpkg/dpkg.cfg.d/excludes 2>/dev/null || true
-
     case "$ID:$VERSION_ID" in
         debian:13)
             apt-get install -y --no-install-recommends \

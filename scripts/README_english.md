@@ -105,6 +105,8 @@ Desktop names, target capabilities, and backend compatibility live in `lib/deskt
 3. Map its session command in `start-desktop-session.sh`; `install-desktop.sh` automatically discovers executable profiles for valid slugs.
 4. Add its display label to the `desktop` choice in both workflow entry files.
 
+Desktop translation files are enabled globally by each Dockerfile before packages are installed: Fedora writes `%_install_langs all`, Debian/Ubuntu disable the dpkg locale `path-exclude`, and Arch removes `NoExtract`. Profiles no longer need to handle language files themselves.
+
 All seven Dockerfiles and the reusable workflow already use the generic profile interface, so an ordinary X11 desktop does not require copied Dockerfiles. Profiles that require patched Wayland packages must also map to a package family in `lib/anland-build.sh` through `anland_package_family`.
 
 ## Anland KDE Installer
@@ -164,7 +166,7 @@ sudo ANLAND_NEXT_RELEASE_REPOSITORY=owner/repository \
 
 ## Anland Niri Installer
 
-Niri, Hyprland, Mango, and Denial installers fetch their compositor and patched `xorg-xwayland` packages from fixed rolling Releases on Debian 13, Ubuntu 26, Fedora 43/44, and Arch ARM64. The lightweight RootFS profile provides a terminal, XDG portal, audio, and fonts; Niri on Arch also includes common desktop utilities. These compositors share patched Xwayland, and their installers prevent conflicting replacement while preserving packages used by other installed components.
+Niri, Hyprland, Mango, and Denial installers fetch their compositor and patched `xorg-xwayland` packages from fixed rolling Releases on Debian 13, Ubuntu 26, Fedora 43/44, and Arch ARM64. Each desktop has its own profile at `scripts/desktops/<slug>.sh`; the profile provides a terminal, XDG portal, audio, and fonts, and Niri on Arch also includes common desktop utilities. These compositors share patched Xwayland, and their installers prevent conflicting replacement while preserving packages used by other installed components.
 
 ```bash
 sudo ./scripts/tui/install-anland-niri.sh

@@ -24,7 +24,7 @@ on:
         type: string
         default: Gold
       desktop:
-        description: Desktop
+        description: Primary desktop (the one that autostarts)
         required: true
         type: choice
         default: KDE
@@ -38,6 +38,11 @@ on:
           - Hyprland
           - Mango
           - Denial
+      extra_desktops:
+        description: "Extra desktops, comma-separated (e.g. Niri,Hyprland)"
+        required: false
+        type: string
+        default: ""
       desktop_autostart:
         description: Start desktop on boot
         required: true

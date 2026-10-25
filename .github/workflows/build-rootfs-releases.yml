@@ -19,7 +19,27 @@ on:
           - all
           - all-wayland
       extra_targets:
-        description: "额外发行版，用英文逗号分隔（例如 Arch,Debian-13)"
+        description: "额外发行版，用英文逗号分隔（例如 Arch,Debian-13）"
+        required: false
+        type: string
+        default: ""
+      extra_targets_desktop:
+        description: 额外发行版的桌面选择
+        required: true
+        type: choice
+        default: none
+        options:
+          - none
+          - KDE
+          - KDE mobile
+          - GNOME
+          - Anland Next
+          - Niri
+          - Hyprland
+          - Mango
+          - Denial
+      extra_targets_extra_desktops:
+        description: "额外发行版的额外桌面环境，用英文逗号分隔（例如 Niri,Hyprland）"
         required: false
         type: string
         default: ""
@@ -142,6 +162,7 @@ jobs:
       ui_language: zh
       build_target: ${{ inputs.build_target }}
       extra_targets: ${{ inputs.extra_targets }}
+      extra_targets_desktops: ${{ inputs.extra_targets_desktop }},${{ inputs.extra_targets_extra_desktops }}
       custom_username: ${{ inputs.custom_username }}
       desktop: ${{ inputs.desktop }}
       extra_desktops: ${{ inputs.extra_desktops }}

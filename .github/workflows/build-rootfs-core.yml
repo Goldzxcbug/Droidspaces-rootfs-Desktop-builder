@@ -10,10 +10,6 @@ on:
       build_target:
         required: true
         type: string
-      extra_targets:
-        required: false
-        type: string
-        default: ''
       custom_username:
         required: false
         type: string
@@ -25,6 +21,14 @@ on:
         required: false
         type: string
         default: ''
+      extra_targets:
+        required: false
+        type: string
+        default: ''
+      extra_targets_desktops:
+        required: false
+        type: string
+        default: none
       desktop_autostart:
         required: true
         type: boolean
@@ -110,6 +114,7 @@ jobs:
         env:
           BUILD_TARGET_INPUT: ${{ inputs.build_target }}
           EXTRA_TARGETS_INPUT: ${{ inputs.extra_targets }}
+          EXTRA_TARGETS_DESKTOPS_INPUT: ${{ inputs.extra_targets_desktops }}
           CUSTOM_USERNAME: ${{ inputs.custom_username }}
           DESKTOP_AUTOSTART_INPUT: ${{ inputs.desktop_autostart }}
           DESKTOP_INPUT: ${{ inputs.desktop }}
@@ -145,10 +150,33 @@ jobs:
             exit 1
           }
 
+          trim() {
+            local s="$1"
+            s="${s#"${s%%[![:space:]]*}"}"
+            s="${s%"${s##*[![:space:]]}"}"
+            printf '%s' "$s"
+          }
+
           PRIMARY_TARGET="$BUILD_TARGET_INPUT"
 
-          # ---------- build the (deduplicated) distro list ----------
+          # ---------- validations that don't depend on target/desktop ----------
+          if [ "$ENABLE_SYSTEMD257_INPUT" = "true" ] && [ "$PRIMARY_TARGET" = "all-wayland" ]; then
+            fail "all-wayland 构建不支持 systemd 257 兼容选项。" \
+              "all-wayland builds do not support the systemd 257 compatibility option."
+          fi
+          if [[ ! "$WAYLAND_PACKAGE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            fail "Wayland 软件包仓库必须使用公开的“所有者/仓库名”格式。" \
+              "Wayland package repository must use the public owner/repository format."
+          fi
+          if [[ ! "$CUSTOM_USERNAME" =~ ^[A-Za-z_][A-Za-z0-9_-]{0,31}$ ]]; then
+            fail "自定义用户名必须是 1 至 32 个字符的有效 Linux 用户名。" \
+              "Custom username must be a 1-32 character Linux username."
+          fi
+
+          # ---------- list builders ----------
           TARGETS=()
+          DESKTOPS=()
+
           add_target() {
             local t="$1" x
             for x in "${TARGETS[@]}"; do
@@ -156,26 +184,7 @@ jobs:
             done
             TARGETS+=("$t")
           }
-          add_target "$PRIMARY_TARGET"
-          IFS=',' read -ra EXTRA_T <<< "$EXTRA_TARGETS_INPUT"
-          for raw in "${EXTRA_T[@]}"; do
-            raw="$(echo "$raw" | xargs)"
-            [ -n "$raw" ] || continue
-            target_is_known "$raw" || fail \
-              "无效的额外发行版：$raw" \
-              "Invalid extra distro: $raw (use a single distro name, not all/all-wayland)"
-            add_target "$raw"
-          done
-          if [ "${#TARGETS[@]}" -gt 1 ]; then
-            case "$PRIMARY_TARGET" in
-              all|all-wayland)
-                fail "extra_targets 不能和 all / all-wayland 同时使用。" \
-                  "extra_targets cannot be combined with all / all-wayland."
-                ;;
-            esac
-          fi
-          # ---------- build the (deduplicated) desktop list ----------
-          DESKTOPS=()
+
           add_desktop() {
             local d="$1" x
             for x in "${DESKTOPS[@]}"; do
@@ -184,17 +193,34 @@ jobs:
             DESKTOPS+=("$d")
           }
 
-          if [ "$PUBLISH_ALL_WAYLAND" = "true" ]; then
-            add_desktop "all-wayland"
-          else
-            PRIMARY="$(desktop_normalize "$DESKTOP_INPUT")" || {
-              fail "无效的桌面环境：$DESKTOP_INPUT" \
-                "Invalid desktop: $DESKTOP_INPUT"
+          # build_targets <csv> -> fills TARGETS (concrete distros only)
+          build_targets() {
+            local csv="$1" raw
+            local -a items=()
+            TARGETS=()
+            IFS=',' read -ra items <<< "$csv" || true
+            for raw in "${items[@]}"; do
+              raw="$(trim "$raw")"
+              [ -n "$raw" ] || continue
+              target_is_known "$raw" || fail \
+                "无效的额外发行版：$raw" \
+                "Invalid extra distro: $raw (use a single distro name, not all/all-wayland)"
+              add_target "$raw"
+            done
+          }
+
+          # build_desktops <primary> <extra_csv> -> fills DESKTOPS
+          build_desktops() {
+            local primary="$1" extra="$2" p d raw
+            local -a items=()
+            DESKTOPS=()
+            p="$(desktop_normalize "$primary")" || {
+              fail "无效的桌面环境：$primary" "Invalid desktop: $primary"
             }
-            add_desktop "$PRIMARY"
-            IFS=',' read -ra EXTRA <<< "$EXTRA_DESKTOPS_INPUT"
-            for raw in "${EXTRA[@]}"; do
-              raw="$(echo "$raw" | xargs)"
+            add_desktop "$p"
+            IFS=',' read -ra items <<< "$extra" || true
+            for raw in "${items[@]}"; do
+              raw="$(trim "$raw")"
               [ -n "$raw" ] || continue
               d="$(desktop_normalize "$raw")" || {
                 fail "无效的桌面环境：$raw" "Invalid desktop: $raw"
@@ -208,114 +234,170 @@ jobs:
                   "'none' cannot be combined with other desktops."
               done
             fi
+          }
+
+          # ---------- group 1: primary distro + its desktops ----------
+          TARGETS=()
+          add_target "$PRIMARY_TARGET"
+          if [ "$PUBLISH_ALL_WAYLAND" = "true" ]; then
+            DESKTOPS=()
+            add_desktop "all-wayland"
+          else
+            build_desktops "$DESKTOP_INPUT" "$EXTRA_DESKTOPS_INPUT"
+          fi
+          G1_TARGETS=("${TARGETS[@]}")
+          G1_DESKTOPS=("${DESKTOPS[@]}")
+
+          # ---------- group 2: extra distros + their own desktops ----------
+          G2_TARGETS=()
+          G2_DESKTOPS=()
+          if [ -n "$(printf '%s' "$EXTRA_TARGETS_INPUT" | tr -d '[:space:],')" ]; then
+            case "$PRIMARY_TARGET" in
+              all|all-wayland)
+                fail "extra_targets 不能和 all / all-wayland 同时使用。" \
+                  "extra_targets cannot be combined with all / all-wayland."
+                ;;
+            esac
+            build_targets "$EXTRA_TARGETS_INPUT"
+            G2_TARGETS=("${TARGETS[@]}")
+            # "Primary,Extra1,Extra2": the first item is the fixed desktop, the rest are extras
+            XT_PRIMARY="$(trim "${EXTRA_TARGETS_DESKTOPS_INPUT%%,*}")"
+            XT_REST=""
+            case "$EXTRA_TARGETS_DESKTOPS_INPUT" in
+              *,*) XT_REST="${EXTRA_TARGETS_DESKTOPS_INPUT#*,}" ;;
+            esac
+            [ -n "$XT_PRIMARY" ] || XT_PRIMARY="none"
+            build_desktops "$XT_PRIMARY" "$XT_REST"
+            G2_DESKTOPS=("${DESKTOPS[@]}")
           fi
 
-          # ---------- per-desktop resolution -> matrix rows ----------
           MULTI=false
-          if [ "${#TARGETS[@]}" -gt 1 ] || [ "${#DESKTOPS[@]}" -gt 1 ]; then
+          if [ "${#G2_TARGETS[@]}" -gt 0 ] || [ "${#G1_DESKTOPS[@]}" -gt 1 ]; then
             MULTI=true
           fi
+
+          # ---------- matrix rows ----------
           MATRIX_FILE="$RUNNER_TEMP/rootfs-matrix.tsv"
           : > "$MATRIX_FILE"
           # columns: template, desktop, display_backend, autostart, pulseaudio
           emit() { printf '%s\t%s\t%s\t%s\t%s\n' "$@" >> "$MATRIX_FILE"; }
 
-          for TARGET in "${TARGETS[@]}"; do
-          for DESKTOP in "${DESKTOPS[@]}"; do
-            if [ "$DESKTOP" = "none" ]; then
-              DISPLAY_BACKEND="x11"
-            elif [ "$DESKTOP" = "all-wayland" ]; then
-              DISPLAY_BACKEND="anland-wayland"
-            else
-              DISPLAY_BACKEND="$(display_backend_normalize "$DISPLAY_BACKEND_INPUT")" || {
-                fail "无效的显示后端：$DISPLAY_BACKEND_INPUT" \
-                  "Invalid display backend: $DISPLAY_BACKEND_INPUT"
-              }
-            fi
-            DESKTOP_AUTOSTART="$DESKTOP_AUTOSTART_INPUT"
+          # uses globals TARGETS and DESKTOPS
+          process_group() {
+            local TARGET DESKTOP DISPLAY_BACKEND DESKTOP_AUTOSTART PULSE_AUDIO candidate wd dockerfile
+            for TARGET in "${TARGETS[@]}"; do
+            for DESKTOP in "${DESKTOPS[@]}"; do
+              if [ "$DESKTOP" = "none" ]; then
+                DISPLAY_BACKEND="x11"
+              elif [ "$DESKTOP" = "all-wayland" ]; then
+                DISPLAY_BACKEND="anland-wayland"
+              else
+                DISPLAY_BACKEND="$(display_backend_normalize "$DISPLAY_BACKEND_INPUT")" || {
+                  fail "无效的显示后端：$DISPLAY_BACKEND_INPUT" \
+                    "Invalid display backend: $DISPLAY_BACKEND_INPUT"
+                }
+              fi
+              DESKTOP_AUTOSTART="$DESKTOP_AUTOSTART_INPUT"
 
-          if [ "$ENABLE_SYSTEMD257_INPUT" = "true" ] && [ "$PRIMARY_TARGET" = "all-wayland" ]; then
+              if [ "$ENABLE_SYSTEMD257_INPUT" = "true" ]; then
+                case "$DESKTOP" in
+                  kde)
+                    message "已启用 systemd 257：普通 KDE 位于验证支持白名单中。" \
+                      "systemd 257 is enabled: standard KDE is on the verified support allowlist."
+                    ;;
+                  none)
+                    DISPLAY_BACKEND="x11"
+                    DESKTOP_AUTOSTART="false"
+                    ;;
+                  *)
+                    message "systemd 257 尚不支持 $DESKTOP：强制使用 none 桌面并关闭桌面开机自启动。" \
+                      "systemd 257 does not support $DESKTOP: forcing desktop=none and disabling desktop auto-start."
+                    DESKTOP="none"
+                    DISPLAY_BACKEND="x11"
+                    DESKTOP_AUTOSTART="false"
+                    ;;
+                esac
+              fi
+
               case "$DESKTOP" in
-                kde)
-                  message "已启用 systemd 257：普通 KDE 位于验证支持白名单中。" \
-                    "systemd 257 is enabled: standard KDE is on the verified support allowlist."
-                  ;;
-                none)
-                  DISPLAY_BACKEND="x11"
-                  DESKTOP_AUTOSTART="false"
-                  ;;
-                *)
-                  message "systemd 257 尚不支持 $DESKTOP：强制使用 none 桌面并关闭桌面开机自启动。" \
-                    "systemd 257 does not support $DESKTOP: forcing desktop=none and disabling desktop auto-start."
-                  DESKTOP="none"
-                  DISPLAY_BACKEND="x11"
-                  DESKTOP_AUTOSTART="false"
+                kde-mobile|gnome|anland-next|niri|hyprland|mango|denial)
+                  DISPLAY_BACKEND="anland-wayland"
                   ;;
               esac
-            fi
 
-            case "$DESKTOP" in
-              kde-mobile|gnome|anland-next|niri|hyprland|mango|denial)
-                DISPLAY_BACKEND="anland-wayland"
-                ;;
-            esac
+              if [ "$DESKTOP" = "none" ] && [ "$DESKTOP_AUTOSTART" = "true" ]; then
+                if [ "$MULTI" = "true" ]; then
+                  message "$TARGET：未安装桌面，已为该镜像关闭桌面开机自启动。" \
+                    "$TARGET: desktop is none, disabling desktop auto-start for this image."
+                  DESKTOP_AUTOSTART="false"
+                else
+                  fail "未安装桌面时不能启用桌面开机自启动。" \
+                    "Desktop auto-start cannot be enabled when desktop is none."
+                fi
+              fi
 
-            if [ "$DESKTOP" = "none" ] && [ "$DESKTOP_AUTOSTART" = "true" ]; then
-              fail "未安装桌面时不能启用桌面开机自启动。" \
-                "Desktop auto-start cannot be enabled when desktop is none."
-            fi
-
-            PULSE_AUDIO="$PULSEAUDIO_INPUT"
-            if [ "$DISPLAY_BACKEND" = "anland-wayland" ]; then
-              PULSE_AUDIO="none"
-            fi
+              PULSE_AUDIO="$PULSEAUDIO_INPUT"
+              if [ "$DISPLAY_BACKEND" = "anland-wayland" ]; then
+                PULSE_AUDIO="none"
+              fi
 
               if [ "$DESKTOP" = "all-wayland" ]; then
-              [ "$TARGET" = "all-wayland" ] || fail \
-                "完整 Wayland 桌面矩阵必须使用 all-wayland 构建目标。" \
-                "The full Wayland desktop matrix requires the all-wayland target."
-              while IFS= read -r wd; do
-                while IFS= read -r candidate; do
-                  emit "$candidate" "$wd" "anland-wayland" "$DESKTOP_AUTOSTART" "none"
-                done < <(desktop_wayland_targets_json "$wd" | jq -r '.[]')
-              done < <(printf '%s\n' kde kde-mobile gnome anland-next niri hyprland mango denial)
-            else
-              case "$TARGET" in
-                all)
+                [ "$TARGET" = "all-wayland" ] || fail \
+                  "完整 Wayland 桌面矩阵必须使用 all-wayland 构建目标。" \
+                  "The full Wayland desktop matrix requires the all-wayland target."
+                while IFS= read -r wd; do
                   while IFS= read -r candidate; do
-                    if desktop_backend_supported "$candidate" "$DESKTOP" "$DISPLAY_BACKEND"; then
-                      emit "$candidate" "$DESKTOP" "$DISPLAY_BACKEND" "$DESKTOP_AUTOSTART" "$PULSE_AUDIO"
+                    emit "$candidate" "$wd" "anland-wayland" "$DESKTOP_AUTOSTART" "none"
+                  done < <(desktop_wayland_targets_json "$wd" | jq -r '.[]')
+                done < <(printf '%s\n' kde kde-mobile gnome anland-next niri hyprland mango denial)
+              else
+                case "$TARGET" in
+                  all)
+                    while IFS= read -r candidate; do
+                      if desktop_backend_supported "$candidate" "$DESKTOP" "$DISPLAY_BACKEND"; then
+                        emit "$candidate" "$DESKTOP" "$DISPLAY_BACKEND" "$DESKTOP_AUTOSTART" "$PULSE_AUDIO"
+                      fi
+                    done < <(for dockerfile in *.Dockerfile; do basename "${dockerfile%.Dockerfile}"; done | sort)
+                    ;;
+                  all-wayland)
+                    [ "$DESKTOP" != "none" ] || fail \
+                      "all-wayland 需要选择一个桌面环境。" \
+                      "all-wayland requires a desktop profile."
+                    while IFS= read -r candidate; do
+                      emit "$candidate" "$DESKTOP" "anland-wayland" "$DESKTOP_AUTOSTART" "none"
+                    done < <(desktop_wayland_targets_json "$DESKTOP" | jq -r '.[]')
+                    ;;
+                  *)
+                    target_is_known "$TARGET" || fail \
+                      "未知的构建目标：$TARGET" \
+                      "Unknown build target: $TARGET"
+                    if desktop_backend_supported "$TARGET" "$DESKTOP" "$DISPLAY_BACKEND"; then
+                      emit "$TARGET" "$DESKTOP" "$DISPLAY_BACKEND" "$DESKTOP_AUTOSTART" "$PULSE_AUDIO"
+                    elif [ "$MULTI" = "true" ]; then
+                      message "跳过不支持的组合：$TARGET/$DESKTOP/$DISPLAY_BACKEND" \
+                        "Skipping unsupported combination: $TARGET/$DESKTOP/$DISPLAY_BACKEND"
+                    else
+                      fail "不支持的发行版、桌面和显示后端组合：$TARGET/$DESKTOP/$DISPLAY_BACKEND" \
+                        "Unsupported target/profile/backend: $TARGET/$DESKTOP/$DISPLAY_BACKEND"
                     fi
-                  done < <(for dockerfile in *.Dockerfile; do basename "${dockerfile%.Dockerfile}"; done | sort)
-                  ;;
-                all-wayland)
-                  [ "$DESKTOP" != "none" ] || fail \
-                    "all-wayland 需要选择一个桌面环境。" \
-                    "all-wayland requires a desktop profile."
-                  while IFS= read -r candidate; do
-                    emit "$candidate" "$DESKTOP" "anland-wayland" "$DESKTOP_AUTOSTART" "none"
-                  done < <(desktop_wayland_targets_json "$DESKTOP" | jq -r '.[]')
-                  ;;
-                *)
-                  target_is_known "$TARGET" || fail \
-                    "未知的构建目标：$TARGET" \
-                    "Unknown build target: $TARGET"
-                  if desktop_backend_supported "$TARGET" "$DESKTOP" "$DISPLAY_BACKEND"; then
-                    emit "$TARGET" "$DESKTOP" "$DISPLAY_BACKEND" "$DESKTOP_AUTOSTART" "$PULSE_AUDIO"
-                  elif [ "$MULTI" = "true" ]; then
-                    message "跳过不支持的组合：$TARGET/$DESKTOP/$DISPLAY_BACKEND" \
-                      "Skipping unsupported combination: $TARGET/$DESKTOP/$DISPLAY_BACKEND"
-                  else
-                    fail "不支持的发行版、桌面和显示后端组合：$TARGET/$DESKTOP/$DISPLAY_BACKEND" \
-                      "Unsupported target/profile/backend: $TARGET/$DESKTOP/$DISPLAY_BACKEND"
-                  fi
-                  ;;
-              esac
-            fi
-          done
-          done
+                    ;;
+                esac
+              fi
+            done
+            done
+          }
 
-          # remove duplicate rows (e.g. several desktops downgraded to none by systemd257)
+          TARGETS=("${G1_TARGETS[@]}")
+          DESKTOPS=("${G1_DESKTOPS[@]}")
+          process_group
+
+          if [ "${#G2_TARGETS[@]}" -gt 0 ]; then
+            TARGETS=("${G2_TARGETS[@]}")
+            DESKTOPS=("${G2_DESKTOPS[@]}")
+            process_group
+          fi
+
+          # remove duplicate rows (same distro/desktop reached from both groups, or downgraded to none)
           awk '!seen[$0]++' "$MATRIX_FILE" > "$MATRIX_FILE.dedup"
           mv "$MATRIX_FILE.dedup" "$MATRIX_FILE"
 

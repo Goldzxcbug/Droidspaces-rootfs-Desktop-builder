@@ -24,7 +24,7 @@ on:
         type: string
         default: Gold
       desktop:
-        description: 桌面选择
+        description: 主桌面（负责开机自启动的桌面）
         required: true
         type: choice
         default: KDE
@@ -39,7 +39,7 @@ on:
           - Mango
           - Denial
       extra_desktops:
-        description: "Extra desktops, comma-separated (e.g. Niri,Hyprland)"
+        description: "额外桌面，用逗号分隔（例如 Niri,Hyprland）"
         required: false
         type: string
         default: ""

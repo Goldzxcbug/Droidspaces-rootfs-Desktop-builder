@@ -166,17 +166,39 @@ jobs:
             DESKTOPS+=("$d")
           }
 
+          # trim leading/trailing whitespace and stray quotes (no xargs:
+          # xargs treats quotes specially and fails hard on unbalanced ones)
+          trim_value() {
+            local v="$1"
+            v="${v#"${v%%[![:space:]]*}"}"
+            v="${v%"${v##*[![:space:]]}"}"
+            case "$v" in
+              \'*\'|\"*\") v="${v:1:${#v}-2}" ;;
+            esac
+            v="${v//\'/}"
+            v="${v//\"/}"
+            printf '%s\n' "$v"
+          }
+
+          # accept full-width commas from Chinese IME input
+          EXTRA_DESKTOPS_NORMALIZED="$(trim_value "${EXTRA_DESKTOPS_INPUT//$'\xef\xbc\x8c'/,}")"
+
           if [ "$PUBLISH_ALL_WAYLAND" = "true" ]; then
             add_desktop "all-wayland"
+            if [ -n "$EXTRA_DESKTOPS_NORMALIZED" ]; then
+              message "已选择 all-wayland 构建目标，额外的桌面参数“$EXTRA_DESKTOPS_INPUT”会被忽略。" \
+                "all-wayland target selected; the extra desktops value \"$EXTRA_DESKTOPS_INPUT\" is ignored."
+            fi
           else
-            PRIMARY="$(desktop_normalize "$DESKTOP_INPUT")" || {
+            PRIMARY_INPUT="$(trim_value "$DESKTOP_INPUT")"
+            PRIMARY="$(desktop_normalize "$PRIMARY_INPUT")" || {
               fail "无效的桌面环境：$DESKTOP_INPUT" \
                 "Invalid desktop: $DESKTOP_INPUT"
             }
             add_desktop "$PRIMARY"
-            IFS=',' read -ra EXTRA <<< "$EXTRA_DESKTOPS_INPUT"
+            IFS=',' read -ra EXTRA <<< "$EXTRA_DESKTOPS_NORMALIZED"
             for raw in "${EXTRA[@]}"; do
-              raw="$(echo "$raw" | xargs)"
+              raw="$(trim_value "$raw")"
               [ -n "$raw" ] || continue
               d="$(desktop_normalize "$raw")" || {
                 fail "无效的桌面环境：$raw" "Invalid desktop: $raw"
@@ -300,15 +322,38 @@ jobs:
           SUMMARY_BACKEND="$(jq -r '[.[].display_backend] | unique | join(", ")' <<< "$MATRIX")"
           SUMMARY_PULSE="$(jq -r '[.[].pulseaudio] | unique | join(", ")' <<< "$MATRIX")"
 
+          # human-readable variants for the release notes
+          SUMMARY_DESKTOP_LABEL=""
+          while IFS= read -r d; do
+            [ -n "$d" ] || continue
+            label="$(desktop_label "$d" 2>/dev/null || printf '%s' "$d")"
+            if [ -z "$SUMMARY_DESKTOP_LABEL" ]; then
+              SUMMARY_DESKTOP_LABEL="$label"
+            else
+              SUMMARY_DESKTOP_LABEL="$SUMMARY_DESKTOP_LABEL, $label"
+            fi
+          done < <(jq -r '[.[].desktop] | unique | .[]' <<< "$MATRIX")
+
+          SUMMARY_BACKEND_LABEL=""
+          while IFS= read -r b; do
+            [ -n "$b" ] || continue
+            label="$(display_backend_label "$b" 2>/dev/null || printf '%s' "$b")"
+            if [ -z "$SUMMARY_BACKEND_LABEL" ]; then
+              SUMMARY_BACKEND_LABEL="$label"
+            else
+              SUMMARY_BACKEND_LABEL="$SUMMARY_BACKEND_LABEL, $label"
+            fi
+          done < <(jq -r '[.[].display_backend] | unique | .[]' <<< "$MATRIX")
+
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
           echo "desktop=$SUMMARY_DESKTOP" >> "$GITHUB_OUTPUT"
           echo "desktop_autostart=$SUMMARY_AUTOSTART" >> "$GITHUB_OUTPUT"
           echo "display_backend=$SUMMARY_BACKEND" >> "$GITHUB_OUTPUT"
           echo "pulseaudio_effective=$SUMMARY_PULSE" >> "$GITHUB_OUTPUT"
           message "最终构建矩阵：$MATRIX" "Final decided build matrix: $MATRIX"
-          message "桌面环境：$SUMMARY_DESKTOP" "Desktop profiles: $SUMMARY_DESKTOP"
+          message "桌面环境：$SUMMARY_DESKTOP_LABEL" "Desktop profiles: $SUMMARY_DESKTOP_LABEL"
           message "桌面开机自启动：$SUMMARY_AUTOSTART" "Desktop auto-start: $SUMMARY_AUTOSTART"
-          message "显示后端：$SUMMARY_BACKEND" "Display backends: $SUMMARY_BACKEND"
+          message "显示后端：$SUMMARY_BACKEND_LABEL" "Display backends: $SUMMARY_BACKEND_LABEL"
           message "Wayland 软件包仓库：$WAYLAND_PACKAGE_REPOSITORY" \
             "Wayland package repository: $WAYLAND_PACKAGE_REPOSITORY"
           message "最终 PulseAudio 设置：$SUMMARY_PULSE" "Final PulseAudio value: $SUMMARY_PULSE"

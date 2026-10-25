@@ -18,6 +18,11 @@ on:
           - Arch
           - all
           - all-wayland
+      extra_targets:
+        description: "Extra distros, comma-separated (e.g. Arch,Debian-13)"
+        required: false
+        type: string
+        default: ""
       custom_username:
         description: Custom username
         required: false
@@ -136,6 +141,7 @@ jobs:
     with:
       ui_language: en
       build_target: ${{ inputs.build_target }}
+      extra_targets: ${{ inputs.extra_targets }}
       custom_username: ${{ inputs.custom_username }}
       desktop: ${{ inputs.desktop }}
       extra_desktops: ${{ inputs.extra_desktops }}

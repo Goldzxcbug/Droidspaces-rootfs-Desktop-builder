@@ -13,6 +13,11 @@ on:
         required: true
         default: droidspaces-rootfs-all-wayland
         type: string
+      sync_cnb:
+        description: 构建完成后同步中文资产到 CNB（默认关闭）
+        required: false
+        default: false
+        type: boolean
       upload_concurrency:
         description: CNB 并发上传数
         required: true
@@ -247,7 +252,7 @@ jobs:
 
   sync-cnb:
     name: 同步中文资产到 CNB
-    if: ${{ inputs.sync_cnb_only != true }}
+    if: ${{ inputs.sync_cnb == true && inputs.sync_cnb_only != true }}
     needs: [prepare, build-zh, build-en]
     runs-on: ubuntu-latest
     steps:

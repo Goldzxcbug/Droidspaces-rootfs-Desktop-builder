@@ -38,6 +38,11 @@ on:
           - Hyprland
           - Mango
           - Denial
+      extra_desktops:
+        description: "Extra desktops, comma-separated (e.g. Niri,Hyprland)"
+        required: false
+        type: string
+        default: ""
       desktop_autostart:
         description: 桌面开机自启动
         required: true
@@ -133,6 +138,7 @@ jobs:
       build_target: ${{ inputs.build_target }}
       custom_username: ${{ inputs.custom_username }}
       desktop: ${{ inputs.desktop }}
+      extra_desktops: ${{ inputs.extra_desktops }}
       desktop_autostart: ${{ inputs.desktop_autostart }}
       display_backend: ${{ inputs.display_backend }}
       PulseAudio: ${{ inputs.PulseAudio }}

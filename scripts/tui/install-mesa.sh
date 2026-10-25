@@ -11,8 +11,6 @@ readonly RELEASE_REPOSITORY="Goldzxcbug/droidspaces-package"
 readonly CNB_RELEASE_REPOSITORY="goldzxcbug/droidspaces-package"
 readonly DISTRIBUTION_TAG="mesa-for-android-container"
 readonly DISTRIBUTION_MANIFEST_NAME="mesa-distribution-manifest"
-readonly MESA_API_URL="https://api.github.com/repos/${RELEASE_REPOSITORY}/releases/tags/${DISTRIBUTION_TAG}"
-readonly MEDIA_DECODE_API_URL="$MESA_API_URL"
 readonly MEDIA_DRIVER_NAME="msm_drm_drv_video.so"
 readonly MEDIA_CHECKSUMS_NAME="SHA256SUMS"
 readonly SOURCE_PROBE_TIMEOUT_SECONDS=2
@@ -46,9 +44,9 @@ RELEASE_TAG=""
 DOWNLOAD_URL=""
 DOWNLOAD_SOURCE=""
 SKIP_SOURCE_PROBE=false
-CNB_MANIFEST_FILE=""
+MESA_MANIFEST_FILE=""
+AUTHORITATIVE_MANIFEST_FILE=""
 OFFICIAL_DOWNLOAD_URL=""
-OFFICIAL_ARCHIVE_DIGEST=""
 EXPECTED_ARCHIVE_SIZE=""
 EXPECTED_ARCHIVE_SHA256=""
 MEDIA_RELEASE_TAG=""
@@ -458,15 +456,11 @@ check_architecture() {
 require_commands() {
     local command_name
 
-    for command_name in awk cat chmod cp dirname grep install mktemp mv od rm sed sha256sum sort stat tar tr uname; do
+    for command_name in awk cat chmod cmp cp dirname grep install mktemp mv od rm sed sha256sum sort stat tar tr uname; do
         command -v "$command_name" >/dev/null 2>&1 || die \
             "缺少运行安装器所需的命令：${command_name}。" \
             "The installer requires the missing command: ${command_name}."
     done
-    if [[ "$DOWNLOAD_SOURCE" != "3" ]]; then
-        command -v jq >/dev/null 2>&1 || die \
-            "未找到 jq，无法解析 GitHub Mesa Release。" "jq was not found; the GitHub Mesa Release cannot be parsed."
-    fi
 
     if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
         die "未找到 curl 或 wget，无法下载 Mesa。" \
@@ -491,16 +485,6 @@ require_commands() {
     esac
 }
 
-download_stdout() {
-    local url="$1"
-
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 --max-time 120 "$url"
-    else
-        wget -q --tries=5 --timeout=20 --waitretry=3 --retry-connrefused -O - "$url"
-    fi
-}
-
 download_file() {
     local url="$1"
     local destination="$2"
@@ -514,50 +498,112 @@ download_file() {
     fi
 }
 
+download_manifest_for_source() {
+    local source="$1"
+    local destination="$2"
+    local manifest_url
+
+    manifest_url="$(distribution_manifest_url_for_source "$source")" || return 1
+    download_file "$manifest_url" "$destination"
+}
+
+# 分发清单是 Release 中的普通资产，读取它不消耗 GitHub API 配额；
+# 构建矩阵并发很高，走 api.github.com 会因匿名配额（60 次/小时/IP）被限流。
+parse_distribution_manifest() {
+    local manifest_file="$1"
+    local manifest_size rows checksum size asset archive_name canonical_base
+    local archive_count=0 driver_count=0 checksums_count=0
+    local archive_checksum="" archive_size=""
+    local driver_checksum="" driver_size=""
+    local checksums_checksum="" checksums_size=""
+
+    manifest_size="$(stat -c '%s' "$manifest_file")" || die \
+        "无法读取 Mesa 分发清单大小。" "Could not read the Mesa distribution manifest size."
+    [[ "$manifest_size" =~ ^[0-9]+$ && "$manifest_size" -gt 0 && \
+       "$manifest_size" -le "$MAX_MANIFEST_BYTES" ]] || die \
+        "Mesa 分发清单大小无效。" "The Mesa distribution manifest size is invalid."
+    rows="$(manifest_asset_rows "$manifest_file")" || die \
+        "Mesa 分发清单格式无效。" "The Mesa distribution manifest format is invalid."
+
+    while IFS=$'\t' read -r checksum size asset; do
+        [[ -n "$checksum" && -n "$size" && -n "$asset" ]] || continue
+        if [[ "$asset" =~ $ASSET_PATTERN ]]; then
+            archive_name="$asset"
+            archive_checksum="$checksum"
+            archive_size="$size"
+            archive_count=$((archive_count + 1))
+        fi
+        case "$asset" in
+            "$MEDIA_DRIVER_NAME")
+                driver_checksum="$checksum"
+                driver_size="$size"
+                driver_count=$((driver_count + 1))
+                ;;
+            "$MEDIA_CHECKSUMS_NAME")
+                checksums_checksum="$checksum"
+                checksums_size="$size"
+                checksums_count=$((checksums_count + 1))
+                ;;
+        esac
+    done <<< "$rows"
+
+    (( archive_count == 1 )) || die \
+        "${TARGET} 在 Mesa 分发清单中没有唯一的 ARM64 包。" \
+        "The Mesa distribution manifest has no unique ARM64 archive for ${TARGET}."
+    (( driver_count == 1 && checksums_count == 1 )) || die \
+        "Mesa 分发清单缺少或重复媒体解码驱动资产。" \
+        "The Mesa distribution manifest has missing or duplicate media decode driver assets."
+    (( archive_size <= MAX_ARCHIVE_BYTES && driver_size <= MAX_MEDIA_DRIVER_BYTES && \
+       checksums_size <= MAX_CHECKSUMS_BYTES )) || die \
+        "Mesa 分发清单中的资产超过大小限制。" \
+        "An asset in the Mesa distribution manifest exceeds its size limit."
+
+    ARCHIVE_NAME="$archive_name"
+    RELEASE_TAG="$DISTRIBUTION_TAG"
+    EXPECTED_ARCHIVE_SHA256="$archive_checksum"
+    EXPECTED_ARCHIVE_SIZE="$archive_size"
+    MEDIA_RELEASE_TAG="$DISTRIBUTION_TAG"
+    MEDIA_DRIVER_RELEASE_DIGEST="sha256:$driver_checksum"
+    MEDIA_DRIVER_RELEASE_SIZE="$driver_size"
+    MEDIA_CHECKSUMS_RELEASE_DIGEST="sha256:$checksums_checksum"
+    MEDIA_CHECKSUMS_RELEASE_SIZE="$checksums_size"
+    canonical_base="$GITHUB_RELEASE_URL/$RELEASE_REPOSITORY/releases/download/$DISTRIBUTION_TAG"
+    OFFICIAL_DOWNLOAD_URL="$canonical_base/$ARCHIVE_NAME"
+    MEDIA_DRIVER_DOWNLOAD_URL="$canonical_base/$MEDIA_DRIVER_NAME"
+    MEDIA_CHECKSUMS_DOWNLOAD_URL="$canonical_base/$MEDIA_CHECKSUMS_NAME"
+}
+
+# 三个下载源都只读取各自 Release 上的分发清单：清单是普通资产，
+# 不消耗 GitHub API 配额，避免 GitHub 托管 runner 共享出口 IP 时被 403 限流。
+# 清单本身仍提供每个资产的 SHA-256 与大小，并继续与随包 SHA256SUMS 交叉校验。
 resolve_release_asset() {
-    local metadata asset_json expected_download_url
+    local source_name
 
-    log "正在读取 Mesa 滚动分发 Release..." "Reading the rolling Mesa distribution Release..."
-    metadata="$(download_stdout "$MESA_API_URL")" || die \
-        "无法获取 Mesa Release 信息，可能触发了 GitHub API 限制。" \
-        "Unable to fetch Mesa Release metadata; the GitHub API may be rate-limited."
+    source_name="$(download_source_name "$DOWNLOAD_SOURCE")" || die \
+        "下载源选择无效。" "The selected download source is invalid."
+    MESA_MANIFEST_FILE="$WORK_DIR/$DISTRIBUTION_MANIFEST_NAME"
+    log "正在从 ${source_name} 读取 Mesa 滚动分发清单..." \
+        "Reading the rolling Mesa distribution manifest from ${source_name}..."
+    download_manifest_for_source "$DOWNLOAD_SOURCE" "$MESA_MANIFEST_FILE" || die \
+        "无法从 ${source_name} 下载 Mesa 分发清单。" \
+        "Could not download the Mesa distribution manifest from ${source_name}."
+    parse_distribution_manifest "$MESA_MANIFEST_FILE"
 
-    asset_json="$(jq -ce --arg pattern "$ASSET_PATTERN" '
-        if (.draft // false) or (.prerelease // false) then
-            error("distribution release is not stable")
-        else
-            [.assets[]? | select((.name // "") | test($pattern))]
-            | if length == 1 then .[0] else error("asset match is not unique") end
-        end
-    ' <<< "$metadata" 2>/dev/null || true)"
-    [[ -n "$asset_json" && "$asset_json" != "null" ]] || die \
-        "滚动分发 Release 没有 ${TARGET} 对应的 ARM64 Mesa 包。" \
-        "The rolling distribution Release has no matching ARM64 Mesa package for ${TARGET}."
-
-    RELEASE_TAG="$(jq -er '.tag_name | select(type == "string" and length > 0)' \
-        <<< "$metadata" 2>/dev/null)" || die \
-        "Release 返回了无效的标签。" "The Release returned an invalid tag."
-    [[ "$RELEASE_TAG" == "$DISTRIBUTION_TAG" ]] || die \
-        "Release 返回了无效的标签。" "The Release returned an invalid tag."
-    ARCHIVE_NAME="$(jq -er '.name // empty' <<< "$asset_json" 2>/dev/null)" || die \
-        "Release 返回了无效的包名。" "The Release returned an invalid asset name."
-    OFFICIAL_DOWNLOAD_URL="$(jq -er '.browser_download_url // empty' \
-        <<< "$asset_json" 2>/dev/null)" || die \
-        "Release 返回了无效的下载地址。" "The Release returned an invalid download URL."
-    OFFICIAL_ARCHIVE_DIGEST="$(jq -r '.digest // empty' \
-        <<< "$asset_json" 2>/dev/null)" || die \
-        "Release 返回了无效的 SHA-256 校验值。" \
-        "The Release returned an invalid SHA-256 digest."
-
-    expected_download_url="${GITHUB_RELEASE_URL}/${RELEASE_REPOSITORY}/releases/download/${RELEASE_TAG}/${ARCHIVE_NAME}"
-    [[ "$OFFICIAL_DOWNLOAD_URL" == "$expected_download_url" ]] || die \
-        "Release 返回了无效的下载地址。" "The Release returned an invalid download URL."
-    [[ "$ARCHIVE_NAME" =~ $ASSET_PATTERN ]] || die \
-        "Release 包名与目标发行版不匹配。" "The Release asset name does not match the target distribution."
+    # 代理源转发的是 GitHub 内容，要求与 GitHub 权威清单逐字节一致；
+    # CNB 镜像独立托管，沿用原有的清单自校验模型。
+    if [[ "$DOWNLOAD_SOURCE" == "2" ]]; then
+        AUTHORITATIVE_MANIFEST_FILE="$WORK_DIR/${DISTRIBUTION_MANIFEST_NAME}.github"
+        download_manifest_for_source 1 "$AUTHORITATIVE_MANIFEST_FILE" || die \
+            "无法从 GitHub 下载 Mesa 权威分发清单。" \
+            "Could not download the authoritative Mesa distribution manifest from GitHub."
+        cmp -s -- "$AUTHORITATIVE_MANIFEST_FILE" "$MESA_MANIFEST_FILE" || die \
+            "${source_name} 的 Mesa 分发清单与 GitHub 不一致。" \
+            "The Mesa distribution manifest on ${source_name} differs from GitHub."
+    fi
     log "已选择 Mesa 包: ${ARCHIVE_NAME}" "Selected Mesa asset: ${ARCHIVE_NAME}"
 }
 
-cnb_manifest_asset_rows() {
+manifest_asset_rows() {
     local manifest="$1"
 
     awk -F '\t' -v expected_tag="$DISTRIBUTION_TAG" '
@@ -589,78 +635,6 @@ cnb_manifest_asset_rows() {
             }
         }
     ' "$manifest"
-}
-
-resolve_cnb_distribution_manifest() {
-    local manifest_url manifest_size rows checksum size asset archive_name canonical_base
-    local archive_count=0 driver_count=0 checksums_count=0
-    local archive_checksum="" archive_size=""
-    local driver_checksum="" driver_size=""
-    local checksums_checksum="" checksums_size=""
-
-    CNB_MANIFEST_FILE="$WORK_DIR/$DISTRIBUTION_MANIFEST_NAME"
-    manifest_url="$(distribution_manifest_url_for_source 3)" || die \
-        "无法构造 CNB Mesa 清单地址。" "Could not build the CNB Mesa manifest URL."
-    log "正在从 CNB 读取 Mesa 分发清单..." "Reading the Mesa distribution manifest from CNB..."
-    download_file "$manifest_url" "$CNB_MANIFEST_FILE" || die \
-        "无法下载 CNB Mesa 分发清单。" "Could not download the CNB Mesa distribution manifest."
-    manifest_size="$(stat -c '%s' "$CNB_MANIFEST_FILE")" || die \
-        "无法读取 CNB Mesa 分发清单大小。" "Could not read the CNB Mesa distribution manifest size."
-    [[ "$manifest_size" =~ ^[0-9]+$ && "$manifest_size" -gt 0 && \
-       "$manifest_size" -le "$MAX_MANIFEST_BYTES" ]] || die \
-        "CNB Mesa 分发清单大小无效。" "The CNB Mesa distribution manifest size is invalid."
-    rows="$(cnb_manifest_asset_rows "$CNB_MANIFEST_FILE")" || die \
-        "CNB Mesa 分发清单格式无效。" "The CNB Mesa distribution manifest format is invalid."
-
-    while IFS=$'\t' read -r checksum size asset; do
-        [[ -n "$checksum" && -n "$size" && -n "$asset" ]] || continue
-        if [[ "$asset" =~ $ASSET_PATTERN ]]; then
-            archive_name="$asset"
-            archive_checksum="$checksum"
-            archive_size="$size"
-            archive_count=$((archive_count + 1))
-        fi
-        case "$asset" in
-            "$MEDIA_DRIVER_NAME")
-                driver_checksum="$checksum"
-                driver_size="$size"
-                driver_count=$((driver_count + 1))
-                ;;
-            "$MEDIA_CHECKSUMS_NAME")
-                checksums_checksum="$checksum"
-                checksums_size="$size"
-                checksums_count=$((checksums_count + 1))
-                ;;
-        esac
-    done <<< "$rows"
-
-    (( archive_count == 1 && driver_count == 1 && checksums_count == 1 )) || die \
-        "CNB Mesa 分发清单缺少或重复目标资产。" \
-        "The CNB Mesa distribution manifest has missing or duplicate target assets."
-    (( archive_size <= MAX_ARCHIVE_BYTES && driver_size <= MAX_MEDIA_DRIVER_BYTES && \
-       checksums_size <= MAX_CHECKSUMS_BYTES )) || die \
-        "CNB Mesa 分发清单中的资产超过大小限制。" \
-        "An asset in the CNB Mesa distribution manifest exceeds its size limit."
-
-    ARCHIVE_NAME="$archive_name"
-    [[ "$ARCHIVE_NAME" =~ $ASSET_PATTERN ]] || die \
-        "CNB Mesa 分发清单中的 Mesa 包名无效。" \
-        "The Mesa asset name in the CNB distribution manifest is invalid."
-    RELEASE_TAG="$DISTRIBUTION_TAG"
-    EXPECTED_ARCHIVE_SHA256="$archive_checksum"
-    EXPECTED_ARCHIVE_SIZE="$archive_size"
-    OFFICIAL_ARCHIVE_DIGEST="sha256:$archive_checksum"
-    MEDIA_RELEASE_TAG="$DISTRIBUTION_TAG"
-    MEDIA_DRIVER_RELEASE_DIGEST="sha256:$driver_checksum"
-    MEDIA_DRIVER_RELEASE_SIZE="$driver_size"
-    MEDIA_CHECKSUMS_RELEASE_DIGEST="sha256:$checksums_checksum"
-    MEDIA_CHECKSUMS_RELEASE_SIZE="$checksums_size"
-    canonical_base="$GITHUB_RELEASE_URL/$RELEASE_REPOSITORY/releases/download/$DISTRIBUTION_TAG"
-    OFFICIAL_DOWNLOAD_URL="$canonical_base/$ARCHIVE_NAME"
-    MEDIA_DRIVER_DOWNLOAD_URL="$canonical_base/$MEDIA_DRIVER_NAME"
-    MEDIA_CHECKSUMS_DOWNLOAD_URL="$canonical_base/$MEDIA_CHECKSUMS_NAME"
-    log "已从 CNB 清单选择 Mesa 包: ${ARCHIVE_NAME}" \
-        "Selected the Mesa asset from the CNB manifest: ${ARCHIVE_NAME}"
 }
 
 download_source_name() {
@@ -819,26 +793,12 @@ select_download_source() {
 }
 
 resolve_expected_archive_sha256() {
-    if [[ "$DOWNLOAD_SOURCE" == "3" ]]; then
-        [[ "$EXPECTED_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || die \
-            "CNB Mesa 分发清单没有有效的 ${ARCHIVE_NAME} SHA-256 校验值。" \
-            "The CNB Mesa distribution manifest has no valid SHA-256 digest for ${ARCHIVE_NAME}."
-        return
-    fi
-
-    EXPECTED_ARCHIVE_SHA256=""
-    if [[ "$DOWNLOAD_SOURCE" == "1" ]]; then
-        return
-    fi
-
     command -v sha256sum >/dev/null 2>&1 || die \
-        "选择第三方镜像需要 sha256sum 来校验下载文件。" \
-        "Selecting a third-party mirror requires sha256sum to verify the downloaded file."
-    if [[ ! "$OFFICIAL_ARCHIVE_DIGEST" =~ ^sha256:([0-9A-Fa-f]{64})$ ]]; then
-        die "GitHub Release 未提供 ${ARCHIVE_NAME} 的有效 SHA-256 校验值，拒绝使用第三方镜像包。" \
-            "GitHub Release did not provide a valid SHA-256 digest for ${ARCHIVE_NAME}; refusing the third-party mirror package."
-    fi
-    EXPECTED_ARCHIVE_SHA256="${BASH_REMATCH[1],,}"
+        "需要 sha256sum 来校验下载文件。" \
+        "sha256sum is required to verify the downloaded file."
+    [[ "$EXPECTED_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || die \
+        "Mesa 分发清单没有有效的 ${ARCHIVE_NAME} SHA-256 校验值。" \
+        "The Mesa distribution manifest has no valid SHA-256 digest for ${ARCHIVE_NAME}."
 }
 
 validate_release_asset_checksum() {
@@ -859,78 +819,9 @@ release_digest_sha256() {
     printf '%s' "${BASH_REMATCH[1],,}"
 }
 
+# 媒体解码驱动的资产名、SHA-256 与大小同样来自分发清单，
+# 因此这里不再查询 api.github.com。
 resolve_media_decode_release() {
-    local metadata driver_json checksums_json expected_url
-
-    log "正在读取滚动分发 Release 中的媒体解码驱动..." \
-        "Reading the media decode driver from the rolling distribution Release..."
-    metadata="$(download_stdout "$MEDIA_DECODE_API_URL")" || die \
-        "无法获取媒体解码驱动 Release 信息，可能触发了 GitHub API 限制。" \
-        "Unable to fetch media decode driver Release metadata; the GitHub API may be rate-limited."
-
-    if ! jq -e '
-        (.draft // false) == false and
-        (.prerelease // false) == false and
-        (.tag_name | type == "string" and length > 0)
-    ' <<< "$metadata" >/dev/null 2>&1; then
-        die "媒体解码驱动的滚动分发 Release 无效。" \
-            "The rolling media decode distribution Release is invalid."
-    fi
-    MEDIA_RELEASE_TAG="$(jq -er '.tag_name' <<< "$metadata" 2>/dev/null)" || die \
-        "媒体解码驱动 Release 返回了无效的标签。" \
-        "The media decode driver Release returned an invalid tag."
-    [[ "$MEDIA_RELEASE_TAG" == "$DISTRIBUTION_TAG" ]] || die \
-        "媒体解码驱动 Release 返回了无效的标签。" \
-        "The media decode driver Release returned an invalid tag."
-
-    driver_json="$(jq -ce --arg name "$MEDIA_DRIVER_NAME" '
-        [.assets[]? | select((.name // "") == $name)]
-        | if length == 1 then .[0] else error("driver asset match is not unique") end
-    ' <<< "$metadata" 2>/dev/null || true)"
-    checksums_json="$(jq -ce --arg name "$MEDIA_CHECKSUMS_NAME" '
-        [.assets[]? | select((.name // "") == $name)]
-        | if length == 1 then .[0] else error("checksum asset match is not unique") end
-    ' <<< "$metadata" 2>/dev/null || true)"
-    [[ -n "$driver_json" && "$driver_json" != "null" ]] || die \
-        "媒体解码驱动 Release 缺少 ${MEDIA_DRIVER_NAME}。" \
-        "The media decode driver Release does not contain ${MEDIA_DRIVER_NAME}."
-    [[ -n "$checksums_json" && "$checksums_json" != "null" ]] || die \
-        "媒体解码驱动 Release 缺少 ${MEDIA_CHECKSUMS_NAME}。" \
-        "The media decode driver Release does not contain ${MEDIA_CHECKSUMS_NAME}."
-
-    MEDIA_DRIVER_DOWNLOAD_URL="$(jq -er '.browser_download_url // empty' \
-        <<< "$driver_json" 2>/dev/null)" || die \
-        "媒体解码驱动 Release 返回了无效的驱动下载地址。" \
-        "The media decode driver Release returned an invalid driver download URL."
-    MEDIA_DRIVER_RELEASE_DIGEST="$(jq -er '.digest // empty' \
-        <<< "$driver_json" 2>/dev/null)" || die \
-        "媒体解码驱动 Release 未提供驱动摘要。" \
-        "The media decode driver Release did not provide a driver digest."
-    MEDIA_DRIVER_RELEASE_SIZE="$(jq -er '.size | select(type == "number" and . > 0 and floor == .)' \
-        <<< "$driver_json" 2>/dev/null)" || die \
-        "媒体解码驱动 Release 返回了无效的驱动大小。" \
-        "The media decode driver Release returned an invalid driver size."
-    MEDIA_CHECKSUMS_DOWNLOAD_URL="$(jq -er '.browser_download_url // empty' \
-        <<< "$checksums_json" 2>/dev/null)" || die \
-        "媒体解码驱动 Release 返回了无效的校验文件下载地址。" \
-        "The media decode driver Release returned an invalid checksum download URL."
-    MEDIA_CHECKSUMS_RELEASE_DIGEST="$(jq -er '.digest // empty' \
-        <<< "$checksums_json" 2>/dev/null)" || die \
-        "媒体解码驱动 Release 未提供校验文件摘要。" \
-        "The media decode driver Release did not provide a checksum-file digest."
-    MEDIA_CHECKSUMS_RELEASE_SIZE="$(jq -er '.size | select(. > 0 and floor == .)' \
-        <<< "$checksums_json" 2>/dev/null)" || die \
-        "媒体解码驱动 Release 返回了无效的校验文件大小。" \
-        "The media decode driver Release returned an invalid checksum-file size."
-
-    expected_url="${GITHUB_RELEASE_URL}/${RELEASE_REPOSITORY}/releases/download/${MEDIA_RELEASE_TAG}/${MEDIA_DRIVER_NAME}"
-    [[ "$MEDIA_DRIVER_DOWNLOAD_URL" == "$expected_url" ]] || die \
-        "媒体解码驱动 Release 返回了无效的驱动下载地址。" \
-        "The media decode driver Release returned an invalid driver download URL."
-    expected_url="${GITHUB_RELEASE_URL}/${RELEASE_REPOSITORY}/releases/download/${MEDIA_RELEASE_TAG}/${MEDIA_CHECKSUMS_NAME}"
-    [[ "$MEDIA_CHECKSUMS_DOWNLOAD_URL" == "$expected_url" ]] || die \
-        "媒体解码驱动 Release 返回了无效的校验文件下载地址。" \
-        "The media decode driver Release returned an invalid checksum download URL."
     release_digest_sha256 "$MEDIA_DRIVER_RELEASE_DIGEST" >/dev/null || die \
         "媒体解码驱动 Release 返回了无效的驱动 SHA-256 摘要。" \
         "The media decode driver Release returned an invalid driver SHA-256 digest."
@@ -1046,8 +937,8 @@ validate_archive_size() {
     (( size <= MAX_ARCHIVE_BYTES )) || die \
         "下载包超过允许的大小。" "The downloaded archive exceeds the allowed size."
     if [[ -n "$EXPECTED_ARCHIVE_SIZE" && "$size" -ne "$EXPECTED_ARCHIVE_SIZE" ]]; then
-        die "下载的 ${ARCHIVE_NAME} 大小与 CNB 分发清单不一致。" \
-            "Downloaded ${ARCHIVE_NAME} size does not match the CNB distribution manifest."
+        die "下载的 ${ARCHIVE_NAME} 大小与 Mesa 分发清单不一致。" \
+            "Downloaded ${ARCHIVE_NAME} size does not match the Mesa distribution manifest."
     fi
 }
 
@@ -1474,12 +1365,8 @@ install_mesa() {
         "无法创建临时目录。" "Unable to create a temporary directory."
     chmod 0700 "$WORK_DIR" || die \
         "无法保护临时目录。" "Unable to secure the temporary directory."
-    if [[ "$DOWNLOAD_SOURCE" == "3" ]]; then
-        resolve_cnb_distribution_manifest
-    else
-        resolve_release_asset
-        resolve_media_decode_release
-    fi
+    resolve_release_asset
+    resolve_media_decode_release
     resolve_expected_archive_sha256
     DOWNLOAD_URL="$(download_url_for_source "$DOWNLOAD_SOURCE")" || die \
         "无法构造所选下载源的地址。" "Could not build the selected download-source URL."
@@ -1490,8 +1377,7 @@ install_mesa() {
     download_file "$DOWNLOAD_URL" "$ARCHIVE_FILE" || die \
         "Mesa 驱动下载失败。" "The Mesa driver download failed."
     validate_archive_size "$ARCHIVE_FILE"
-    if [[ -n "$EXPECTED_ARCHIVE_SHA256" ]] && \
-        ! validate_release_asset_checksum "$ARCHIVE_FILE"; then
+    if ! validate_release_asset_checksum "$ARCHIVE_FILE"; then
         die "下载的 ${ARCHIVE_NAME} 未通过 SHA-256 校验。" \
             "Downloaded ${ARCHIVE_NAME} failed SHA-256 verification."
     fi

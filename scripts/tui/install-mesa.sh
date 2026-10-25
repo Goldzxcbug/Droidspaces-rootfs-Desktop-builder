@@ -456,7 +456,9 @@ check_architecture() {
 require_commands() {
     local command_name
 
-    for command_name in awk cat chmod cmp cp dirname grep install mktemp mv od rm sed sha256sum sort stat tar tr uname; do
+    # 这里只允许出现各发行版基础镜像都自带的命令：cmp 来自 diffutils，
+    # Fedora/Arch 最小镜像并未安装，因此清单比对改用 coreutils 的 sha256sum。
+    for command_name in awk cat chmod cp dirname grep install mktemp mv od rm sed sha256sum sort stat tar tr uname; do
         command -v "$command_name" >/dev/null 2>&1 || die \
             "缺少运行安装器所需的命令：${command_name}。" \
             "The installer requires the missing command: ${command_name}."
@@ -589,14 +591,23 @@ resolve_release_asset() {
         "Could not download the Mesa distribution manifest from ${source_name}."
     parse_distribution_manifest "$MESA_MANIFEST_FILE"
 
-    # 代理源转发的是 GitHub 内容，要求与 GitHub 权威清单逐字节一致；
+    # 代理源转发的是 GitHub 内容，要求与 GitHub 权威清单一致；
     # CNB 镜像独立托管，沿用原有的清单自校验模型。
     if [[ "$DOWNLOAD_SOURCE" == "2" ]]; then
+        local mirror_digest github_digest
         AUTHORITATIVE_MANIFEST_FILE="$WORK_DIR/${DISTRIBUTION_MANIFEST_NAME}.github"
         download_manifest_for_source 1 "$AUTHORITATIVE_MANIFEST_FILE" || die \
             "无法从 GitHub 下载 Mesa 权威分发清单。" \
             "Could not download the authoritative Mesa distribution manifest from GitHub."
-        cmp -s -- "$AUTHORITATIVE_MANIFEST_FILE" "$MESA_MANIFEST_FILE" || die \
+        # 用 sha256sum 而非 cmp 比对：diffutils 不保证存在于最小镜像。
+        # 两个摘要都必须取到有效值，避免空串互相判等而放行。
+        mirror_digest="$(file_sha256 "$MESA_MANIFEST_FILE")" || die \
+            "无法计算 ${source_name} 的 Mesa 分发清单摘要。" \
+            "Could not compute the ${source_name} Mesa distribution manifest digest."
+        github_digest="$(file_sha256 "$AUTHORITATIVE_MANIFEST_FILE")" || die \
+            "无法计算 GitHub 的 Mesa 分发清单摘要。" \
+            "Could not compute the GitHub Mesa distribution manifest digest."
+        [[ "$mirror_digest" == "$github_digest" ]] || die \
             "${source_name} 的 Mesa 分发清单与 GitHub 不一致。" \
             "The Mesa distribution manifest on ${source_name} differs from GitHub."
     fi
@@ -801,15 +812,23 @@ resolve_expected_archive_sha256() {
         "The Mesa distribution manifest has no valid SHA-256 digest for ${ARCHIVE_NAME}."
 }
 
+# 输出文件的 SHA-256；失败时返回非零，避免空串被当成匹配成功。
+file_sha256() {
+    local file="$1"
+    local checksum
+
+    [[ -f "$file" ]] || return 1
+    checksum="$(sha256sum "$file" 2>/dev/null | awk '{print $1}')" || return 1
+    [[ "$checksum" =~ ^[0-9a-f]{64}$ ]] || return 1
+    printf '%s' "$checksum"
+}
+
 validate_release_asset_checksum() {
     local asset_file="$1"
     local actual_checksum
 
-    if ! actual_checksum="$(sha256sum "$asset_file" | awk '{print $1}')" || \
-        ! [[ "$actual_checksum" =~ ^[0-9a-f]{64}$ ]] || \
-        [[ "$actual_checksum" != "$EXPECTED_ARCHIVE_SHA256" ]]; then
-        return 1
-    fi
+    actual_checksum="$(file_sha256 "$asset_file")" || return 1
+    [[ "$actual_checksum" == "$EXPECTED_ARCHIVE_SHA256" ]]
 }
 
 release_digest_sha256() {
@@ -844,8 +863,8 @@ validate_sha256_file() {
     local expected_checksum="$2"
     local actual_checksum
 
-    actual_checksum="$(sha256sum "$file" | awk '{print $1}')" || return 1
-    [[ "$actual_checksum" =~ ^[0-9a-f]{64}$ && "$actual_checksum" == "$expected_checksum" ]]
+    actual_checksum="$(file_sha256 "$file")" || return 1
+    [[ "$actual_checksum" == "$expected_checksum" ]]
 }
 
 validate_aarch64_shared_object() {

@@ -33,7 +33,8 @@ Choose the target, desktop, display backend, and optional features on the GitHub
 | --- | --- | --- |
 | `build_target` | Distribution, `all`, `all-wayland`; default `Debian-13` | Select build targets. |
 | `custom_username` | 1–32 letters, digits, `_`, or `-`, starting with a letter or `_`; default `Gold` | Normal RootFS user. |
-| `desktop` | `none`, `KDE`, `KDE mobile`, `GNOME`, `Anland Next`, `Niri`, `Hyprland`, `Mango`, `Denial`; default `KDE` | Select desktop or command-line mode. |
+| `desktop` | `none`, `KDE`, `KDE mobile`, `GNOME`, `Anland Next`, `Niri`, `Hyprland`, `Mango`, `Denial`; default `KDE` | Selects the primary desktop, i.e. the one that autostarts; `none` is command-line only. |
+| `extra_desktops` | Comma-separated desktop names, e.g. `Niri,Hyprland`; empty by default | Additional desktop profiles to build alongside the primary one; leave empty to build only the primary desktop. `none` cannot be combined with other desktops, and the option is ignored for the `all-wayland` target. |
 | `desktop_autostart` | `true` / `false`; default `true` | Installs the desktop startup service; must be disabled for `none`. |
 | `display_backend` | `x11` / `anland-wayland` | Defaults to Wayland in the Chinese workflow and X11 in the English workflow; Arch KDE and some profiles force Wayland. |
 | `PulseAudio` | `socket` / `tcp` / `none`; default `socket` | X11 audio forwarding; Anland sets this to `none`. |

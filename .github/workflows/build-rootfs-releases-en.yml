@@ -23,6 +23,26 @@ on:
         required: false
         type: string
         default: ""
+      extra_targets_desktop:
+        description: Primary desktop for the extra distros
+        required: true
+        type: choice
+        default: none
+        options:
+          - none
+          - KDE
+          - KDE mobile
+          - GNOME
+          - Anland Next
+          - Niri
+          - Hyprland
+          - Mango
+          - Denial
+      extra_targets_extra_desktops:
+        description: "Extra desktops for the extra distros, comma-separated (e.g. Niri,Hyprland)"
+        required: false
+        type: string
+        default: ""
       custom_username:
         description: Custom username
         required: false
@@ -142,6 +162,7 @@ jobs:
       ui_language: en
       build_target: ${{ inputs.build_target }}
       extra_targets: ${{ inputs.extra_targets }}
+      extra_targets_desktops: ${{ inputs.extra_targets_desktop }},${{ inputs.extra_targets_extra_desktops }}
       custom_username: ${{ inputs.custom_username }}
       desktop: ${{ inputs.desktop }}
       extra_desktops: ${{ inputs.extra_desktops }}

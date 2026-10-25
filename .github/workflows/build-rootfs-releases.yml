@@ -39,7 +39,7 @@ on:
           - Mango
           - Denial
       extra_desktops:
-        description: "Extra desktops, comma-separated (e.g. Niri,Hyprland)"
+        description: "额外桌面环境，用英文逗号分隔（例如 Niri,Hyprland）"
         required: false
         type: string
         default: ""

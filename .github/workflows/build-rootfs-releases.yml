@@ -44,7 +44,7 @@ on:
         type: string
         default: ""
       desktop_autostart:
-        description: 桌面开机自启动
+        description: 桌面开机自启动（桌面为 none 时自动关闭）
         required: true
         type: boolean
         default: true

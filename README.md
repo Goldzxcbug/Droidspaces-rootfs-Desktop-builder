@@ -36,8 +36,6 @@
 - [droidspaces-media-decode](https://github.com/Re-s/droidspaces-media-decode)：提供 Android MediaCodec 容器硬件解码支持。
 - [Anland](https://github.com/superturtlee/anland)：提供 Wayland 显示后端及相关工作。
 - [Droidspaces USB Manager](https://github.com/Yizhou147/Droidspaces-USB-Manager)：提供 USB 存储和 ADB 设备管理工具。
-- [ObsidianArc](https://github.com/OnyxAxisOwO/ObsidianArc)：自托管多模型聊天网关，感谢他们提供公益 AI 服务。
-
 ---
 
 [所有桌面截图](docs/zh/README.md#桌面截图) · [English README](README_english.md)

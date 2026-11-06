@@ -44,7 +44,7 @@ on:
         type: string
         default: ""
       desktop_autostart:
-        description: Start desktop on boot
+        description: Start desktop on boot (auto-disabled when desktop is none)
         required: true
         type: boolean
         default: true

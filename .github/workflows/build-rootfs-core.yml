@@ -260,8 +260,9 @@ jobs:
             esac
 
             if [ "$DESKTOP" = "none" ] && [ "$DESKTOP_AUTOSTART" = "true" ]; then
-              fail "未安装桌面时不能启用桌面开机自启动。" \
-                "Desktop auto-start cannot be enabled when desktop is none."
+              message "桌面环境为 none：自动关闭桌面开机自启动。" \
+                "Desktop is none: disabling desktop auto-start automatically."
+              DESKTOP_AUTOSTART="false"
             fi
 
             PULSE_AUDIO="$PULSEAUDIO_INPUT"

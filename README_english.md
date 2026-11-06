@@ -36,8 +36,6 @@ Subscribe to the rolling desktop feed in Droidspaces: [Chinese RootFS (GitHub)](
 - [droidspaces-media-decode](https://github.com/Re-s/droidspaces-media-decode): Android MediaCodec hardware decoding for containers.
 - [Anland](https://github.com/superturtlee/anland): Wayland display backend and related work.
 - [Droidspaces USB Manager](https://github.com/Yizhou147/Droidspaces-USB-Manager): USB storage and ADB device management.
-- [ObsidianArc](https://github.com/OnyxAxisOwO/ObsidianArc): self-hosted multi-model chat gateway; thanks for providing public-benefit AI services.
-
 ---
 
 [All desktop screenshots](docs/en/README.md#screenshots) · [中文 README](README.md)

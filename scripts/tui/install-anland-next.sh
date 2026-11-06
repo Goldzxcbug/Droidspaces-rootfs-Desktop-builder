@@ -25,6 +25,8 @@ readonly MESA_DNF_MANAGED_BEGIN="# BEGIN install-mesa package holds"
 readonly MESA_DNF_MANAGED_END="# END install-mesa package holds"
 readonly SYSTEMD257_STATE="/etc/droidspaces-systemd257"
 readonly COMPONENT_STATE_DIR="${DROIDSPACES_COMPONENT_STATE_DIR:-/var/lib/droidspaces-tui/components}"
+readonly DESKTOP_CONFIG="${DROIDSPACES_DESKTOP_CONFIG:-/etc/droidspaces-desktop.conf}"
+readonly COMPONENT_NAME="next"
 
 WORK_DIR=""
 PREPARED_WORK_DIR="${ANLAND_NEXT_WORK_DIR:-}"
@@ -90,6 +92,67 @@ record_component_version() {
     rm -f -- "$temporary_file" || true
     log "无法记录已安装的 Next 版本。" "Could not record the installed Next version."
     return 0
+}
+
+update_desktop_config() {
+    local desktop="anland-next" config_dir temporary_file line configured_desktop=""
+    local desktop_lines=0
+
+    config_dir="$(dirname -- "$DESKTOP_CONFIG")"
+    if [[ ! -e "$DESKTOP_CONFIG" && ! -L "$DESKTOP_CONFIG" ]]; then
+        if [[ ! -d "$config_dir" ]]; then
+            install -d -m 0755 -- "$config_dir" || \
+                die "无法创建桌面配置目录。" "Could not create the desktop configuration directory."
+        fi
+        temporary_file="$(mktemp "$config_dir/.droidspaces-desktop.conf.tmp.XXXXXXXX")" || \
+            die "无法创建临时桌面配置。" "Could not create a temporary desktop configuration."
+        if ! printf 'DESKTOP=%s\nDISPLAY_BACKEND=anland-wayland\n' "$desktop" > "$temporary_file" || \
+            ! chmod 0644 "$temporary_file" || ! mv -f -- "$temporary_file" "$DESKTOP_CONFIG"; then
+            rm -f -- "$temporary_file" || true
+            die "无法创建桌面配置。" "Could not create the desktop configuration."
+        fi
+        log "已创建桌面配置：DESKTOP=${desktop}。" \
+            "Created the desktop configuration with DESKTOP=${desktop}."
+        return
+    fi
+
+    if [[ ! -f "$DESKTOP_CONFIG" || -L "$DESKTOP_CONFIG" || ! -r "$DESKTOP_CONFIG" ]]; then
+        die "桌面配置不是可安全修改的普通文件：${DESKTOP_CONFIG}。" \
+            "The desktop configuration is not a safely writable regular file: ${DESKTOP_CONFIG}."
+    fi
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        case "$line" in
+            DESKTOP=*)
+                configured_desktop="${line#DESKTOP=}"
+                ((desktop_lines += 1))
+                ;;
+        esac
+    done < "$DESKTOP_CONFIG"
+    if ((desktop_lines != 1)) || \
+        [[ ! "$configured_desktop" =~ ^(none|[a-z][a-z0-9-]*)$ ]]; then
+        die "桌面配置格式无效，未覆盖原文件。" \
+            "The desktop configuration is invalid; the original file was not overwritten."
+    fi
+    if [[ "$configured_desktop" != none && "$configured_desktop" != anland-next ]]; then
+        log "保留现有桌面配置：DESKTOP=${configured_desktop}。" \
+            "Keeping the existing desktop configuration: DESKTOP=${configured_desktop}."
+        return
+    fi
+
+    temporary_file="$(mktemp "$config_dir/.droidspaces-desktop.conf.tmp.XXXXXXXX")" || \
+        die "无法创建临时桌面配置。" "Could not create a temporary desktop configuration."
+    if ! awk -v desktop="$desktop" '
+        /^DESKTOP=/ { print "DESKTOP=" desktop; next }
+        /^DISPLAY_BACKEND=/ { if (!backend++) print "DISPLAY_BACKEND=anland-wayland"; next }
+        { print }
+        END { if (!backend) print "DISPLAY_BACKEND=anland-wayland" }
+    ' "$DESKTOP_CONFIG" > "$temporary_file" || ! chmod 0644 "$temporary_file" || \
+        ! mv -f -- "$temporary_file" "$DESKTOP_CONFIG"; then
+        rm -f -- "$temporary_file" || true
+        die "无法更新桌面配置。" "Could not update the desktop configuration."
+    fi
+    log "已将桌面配置更新为 DESKTOP=${desktop}。" \
+        "Updated the desktop configuration to DESKTOP=${desktop}."
 }
 
 parse_arguments() {
@@ -158,6 +221,7 @@ require_root() {
         "ANLAND_NEXT_WORK_DIR=$WORK_DIR" \
         "ANLAND_NEXT_PACKAGE_FILE=$PACKAGE_FILE" \
         "DROIDSPACES_COMPONENT_STATE_DIR=$COMPONENT_STATE_DIR" \
+        "DROIDSPACES_DESKTOP_CONFIG=$DESKTOP_CONFIG" \
         bash "$script_path" "$@"; then
         status=0
     else
@@ -1120,9 +1184,85 @@ install_rpm_packages() {
     printf '  hold: %s\n' "${packages[@]}"
 }
 
+write_pacman_hold_block() {
+    local -a packages=("$@")
+    local temporary
+    ((${#packages[@]} > 0)) || return 0
+    command -v pacman >/dev/null 2>&1 || return 0
+    [[ -f /etc/pacman.conf ]] || return 0
+    temporary="$(mktemp -t "anland-$COMPONENT_NAME-pacman.XXXXXXXX")" || return 1
+    if ! awk -v begin="# BEGIN anland-$COMPONENT_NAME package holds" \
+        -v end="# END anland-$COMPONENT_NAME package holds" \
+        -v packages="${packages[*]}" '
+        $0 == begin { skip = 1; next }
+        $0 == end { skip = 0; next }
+        skip { next }
+        /^\[options\][[:space:]]*$/ && !wrote {
+            print
+            print begin
+            print "IgnorePkg = " packages
+            print end
+            wrote = 1
+            next
+        }
+        { print }
+        END { if (skip) exit 1; if (!wrote) exit 1 }
+    ' /etc/pacman.conf > "$temporary"; then
+        rm -f -- "$temporary"
+        return 1
+    fi
+    if ! install -m 0644 -- "$temporary" /etc/pacman.conf; then
+        rm -f -- "$temporary"
+        return 1
+    fi
+    rm -f -- "$temporary"
+}
+
+remove_pacman_hold_entries() {
+    local -a packages=("$@")
+    local temporary
+    command -v pacman >/dev/null 2>&1 || return 0
+    [[ -f /etc/pacman.conf ]] || return 0
+    temporary="$(mktemp -t "anland-$COMPONENT_NAME-pacman.XXXXXXXX")" || return 1
+    if ! awk -v begin="# BEGIN anland-$COMPONENT_NAME package holds" \
+        -v end="# END anland-$COMPONENT_NAME package holds" \
+        -v remove_list="${packages[*]}" '
+        BEGIN { remove_count = split(remove_list, remove_names, /[[:space:]]+/) }
+        $0 == begin { inside = 1; next }
+        $0 == end { inside = 0; next }
+        inside { next }
+        /^# BEGIN .* package holds$/ { foreign = 1; print; next }
+        /^# END .* package holds$/ { foreign = 0; print; next }
+        foreign { print; next }
+        /^[[:space:]]*IgnorePkg[[:space:]]*=/ {
+            equals = index($0, "=")
+            count = split(substr($0, equals + 1), items, /[[:space:]]+/)
+            output = ""
+            for (i = 1; i <= count; i++) {
+                remove = 0
+                for (j = 1; j <= remove_count; j++) {
+                    if (items[i] == remove_names[j]) remove = 1
+                }
+                if (items[i] != "" && !remove) output = output (output == "" ? "" : " ") items[i]
+            }
+            if (output != "") print substr($0, 1, equals) " " output
+            next
+        }
+        { print }
+    ' /etc/pacman.conf > "$temporary"; then
+        rm -f -- "$temporary"
+        return 1
+    fi
+    if ! install -m 0644 -- "$temporary" /etc/pacman.conf; then
+        rm -f -- "$temporary"
+        return 1
+    fi
+    rm -f -- "$temporary"
+}
+
 install_arch_packages() {
     local -a files packages
-    local pacman_conf package
+    local pacman_conf
 
     command -v pacman >/dev/null 2>&1 || die "未找到 pacman。" "pacman was not found."
     mapfile -t files < <(find "$PACKAGE_DIR" -maxdepth 1 -type f -name '*.pkg.tar.*' -print | sort)
@@ -1145,26 +1285,8 @@ install_arch_packages() {
     fi
     rm -f -- "$pacman_conf"
 
-    for package in anland-session; do
-        if ! awk -v package="$package" '
-            $1 == "IgnorePkg" {
-                for (i = 3; i <= NF; i++) {
-                    if ($i == package) {
-                        found = 1
-                    }
-                }
-            }
-            END { exit found ? 0 : 1 }
-        ' /etc/pacman.conf; then
-            if grep -qE '^[[:space:]]*IgnorePkg[[:space:]]*=' /etc/pacman.conf; then
-                sed -i -E "0,/^[[:space:]]*IgnorePkg[[:space:]]*=/{s/^([[:space:]]*IgnorePkg[[:space:]]*=.*)$/\\1 ${package}/}" /etc/pacman.conf
-            elif grep -qE '^\[options\][[:space:]]*$' /etc/pacman.conf; then
-                sed -i "/^\[options\][[:space:]]*$/a IgnorePkg = ${package}" /etc/pacman.conf
-            else
-                die "pacman.conf 缺少 [options] 段。" "pacman.conf has no [options] section."
-            fi
-        fi
-    done
+    write_pacman_hold_block anland-session || \
+        die "无法更新 pacman 锁定配置。" "Unable to update the pacman hold configuration."
     mapfile -t packages < <(pacman -Qq -p "${files[@]}" | sort -u)
     ((${#packages[@]} > 0)) || die "无法读取 Arch 包名。" "Could not determine the Arch package names."
     printf '  hold: %s\n' "${packages[@]}"
@@ -1280,7 +1402,7 @@ uninstall_next_rpm() {
 }
 
 uninstall_next_arch() {
-    local package action backup stripped
+    local package action backup
     local -a packages=() restore_packages=() remove_packages=()
     command -v pacman >/dev/null 2>&1 || die "未找到 pacman。" "pacman was not found."
     [[ -f /etc/pacman.conf ]] || die "找不到 pacman.conf。" "pacman.conf was not found."
@@ -1300,34 +1422,15 @@ uninstall_next_arch() {
         fi
     done
     backup="$(mktemp -t anland-next-uninstall.XXXXXXXX)"
-    stripped="$(mktemp -t anland-next-uninstall.XXXXXXXX)"
     cp -p -- /etc/pacman.conf "$backup"
-    if ! awk -v remove_list="${packages[*]}" \
-        -v begin="# BEGIN anland-next package holds" -v end="# END anland-next package holds" '
-        $0 == begin || $0 == end { next }
-        BEGIN { remove_count = split(remove_list, remove_names, /[[:space:]]+/) }
-        /^[[:space:]]*IgnorePkg[[:space:]]*=/ {
-            equals = index($0, "=")
-            count = split(substr($0, equals + 1), items, /[[:space:]]+/)
-            output = ""
-            for (i = 1; i <= count; i++) {
-                remove = 0
-                for (j = 1; j <= remove_count; j++) if (items[i] == remove_names[j]) remove = 1
-                if (items[i] != "" && !remove) output = output (output == "" ? "" : " ") items[i]
-            }
-            if (output != "") print substr($0, 1, equals) " " output
-            next
-        }
-        { print }
-    ' /etc/pacman.conf > "$stripped" || \
-        ! install -m 0644 "$stripped" /etc/pacman.conf || \
+    if ! remove_pacman_hold_entries "${packages[@]}" || \
         ! { ((${#remove_packages[@]} == 0)) || pacman -R --noconfirm "${remove_packages[@]}"; } || \
         ! { ((${#restore_packages[@]} == 0)) || pacman -S --noconfirm "${restore_packages[@]}"; }; then
         install -m 0644 "$backup" /etc/pacman.conf || true
-        rm -f -- "$backup" "$stripped"
+        rm -f -- "$backup"
         die "卸载 Anland Next 或恢复发行版图形包失败。" "Failed to uninstall Anland Next or restore distribution graphics packages."
     fi
-    rm -f -- "$backup" "$stripped" "$COMPONENT_STATE_DIR/anland-next.version"
+    rm -f -- "$backup" "$COMPONENT_STATE_DIR/anland-next.version"
     rmdir -- "${APT_HOLD_STATE%/*}" 2>/dev/null || true
 }
 
@@ -1380,6 +1483,7 @@ main() {
     verify_installed_xwayland_paths
     refresh_user_service
     record_component_version "$PACKAGE_VERSION"
+    update_desktop_config
     log "Anland Next session 安装完成（${PACKAGE_VERSION:-unknown}）。" \
         "Anland Next session installation completed (${PACKAGE_VERSION:-unknown})."
 }

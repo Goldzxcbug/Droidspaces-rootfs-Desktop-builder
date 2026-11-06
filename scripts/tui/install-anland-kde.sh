@@ -21,7 +21,8 @@ readonly DNF_MANAGED_END="# END anland-kde package holds"
 readonly MESA_DNF_MANAGED_BEGIN="# BEGIN install-mesa package holds"
 readonly MESA_DNF_MANAGED_END="# END install-mesa package holds"
 readonly SYSTEMD257_STATE="/etc/droidspaces-systemd257"
-readonly COMPONENT_STATE_DIR="/var/lib/droidspaces-tui/components"
+readonly COMPONENT_NAME="kde"
+readonly COMPONENT_STATE_DIR="${DROIDSPACES_COMPONENT_STATE_DIR:-/var/lib/droidspaces-tui/components}"
 readonly DESKTOP_CONFIG="${DROIDSPACES_DESKTOP_CONFIG:-/etc/droidspaces-desktop.conf}"
 
 WORK_DIR=""
@@ -43,6 +44,7 @@ EXPECTED_ARCHIVE_SHA256=""
 OFFICIAL_RELEASE_METADATA=""
 UNINSTALL=false
 KDE_XWAYLAND_PRESERVED=false
+KDE_XWAYLAND_OWNER=""
 
 detect_language() {
     local locale_name="${LC_ALL:-${LC_MESSAGES:-${LANG:-C}}}"
@@ -176,9 +178,112 @@ parse_arguments() {
     done
 }
 
+other_xwayland_owner() {
+    local component state_file
+    for component in kde gnome niri hyprland mango denial next; do
+        [[ "$component" != "$COMPONENT_NAME" ]] || continue
+        state_file="$COMPONENT_STATE_DIR/$component.version"
+        [[ "$component" == next ]] && state_file="$COMPONENT_STATE_DIR/anland-next.version"
+        if [[ -s "$state_file" ||
+              -s "/var/lib/anland-$component/apt-holds" ||
+              -s "/var/lib/anland-$component/pacman-packages" ]] ||
+            grep -Fqx "# BEGIN anland-$component package holds" /etc/pacman.conf /etc/dnf/dnf.conf 2>/dev/null; then
+            printf '%s' "$component"
+            return 0
+        fi
+    done
+    local legacy
+    for legacy in kwin mutter; do
+        [[ "$legacy" == kwin && "$COMPONENT_NAME" == kde ]] && continue
+        [[ "$legacy" == mutter && "$COMPONENT_NAME" == gnome ]] && continue
+        if grep -Eq "^[[:space:]]*IgnorePkg[[:space:]]*=.*(^|[[:space:]])${legacy}([[:space:]]|$)" /etc/pacman.conf 2>/dev/null; then
+            printf '%s' "$legacy"
+            return 0
+        fi
+    done
+    return 1
+}
+
+write_pacman_hold_block() {
+    local -a packages=("$@")
+    local temporary
+    ((${#packages[@]} > 0)) || return 0
+    command -v pacman >/dev/null 2>&1 || return 0
+    [[ -f /etc/pacman.conf ]] || return 0
+    temporary="$(mktemp -t "anland-$COMPONENT_NAME-pacman.XXXXXXXX")" || return 1
+    if ! awk -v begin="# BEGIN anland-$COMPONENT_NAME package holds" \
+        -v end="# END anland-$COMPONENT_NAME package holds" \
+        -v packages="${packages[*]}" '
+        $0 == begin { skip = 1; next }
+        $0 == end { skip = 0; next }
+        skip { next }
+        /^\[options\][[:space:]]*$/ && !wrote {
+            print
+            print begin
+            print "IgnorePkg = " packages
+            print end
+            wrote = 1
+            next
+        }
+        { print }
+        END { if (skip) exit 1; if (!wrote) exit 1 }
+    ' /etc/pacman.conf > "$temporary"; then
+        rm -f -- "$temporary"
+        return 1
+    fi
+    if ! install -m 0644 -- "$temporary" /etc/pacman.conf; then
+        rm -f -- "$temporary"
+        return 1
+    fi
+    rm -f -- "$temporary"
+}
+
+remove_pacman_hold_entries() {
+    local -a packages=("$@")
+    local temporary
+    command -v pacman >/dev/null 2>&1 || return 0
+    [[ -f /etc/pacman.conf ]] || return 0
+    temporary="$(mktemp -t "anland-$COMPONENT_NAME-pacman.XXXXXXXX")" || return 1
+    if ! awk -v begin="# BEGIN anland-$COMPONENT_NAME package holds" \
+        -v end="# END anland-$COMPONENT_NAME package holds" \
+        -v remove_list="${packages[*]}" '
+        BEGIN { remove_count = split(remove_list, remove_names, /[[:space:]]+/) }
+        $0 == begin { inside = 1; next }
+        $0 == end { inside = 0; next }
+        inside { next }
+        /^# BEGIN .* package holds$/ { foreign = 1; print; next }
+        /^# END .* package holds$/ { foreign = 0; print; next }
+        foreign { print; next }
+        /^[[:space:]]*IgnorePkg[[:space:]]*=/ {
+            equals = index($0, "=")
+            count = split(substr($0, equals + 1), items, /[[:space:]]+/)
+            output = ""
+            for (i = 1; i <= count; i++) {
+                remove = 0
+                for (j = 1; j <= remove_count; j++) {
+                    if (items[i] == remove_names[j]) remove = 1
+                }
+                if (items[i] != "" && !remove) output = output (output == "" ? "" : " ") items[i]
+            }
+            if (output != "") print substr($0, 1, equals) " " output
+            next
+        }
+        { print }
+    ' /etc/pacman.conf > "$temporary"; then
+        rm -f -- "$temporary"
+        return 1
+    fi
+    if ! install -m 0644 -- "$temporary" /etc/pacman.conf; then
+        rm -f -- "$temporary"
+        return 1
+    fi
+    rm -f -- "$temporary"
+}
+
 uninstall_kde_deb() {
-    local package candidate
-    local -a packages=() package_specs=()
+    local package candidate owner
+    local preserve_xwayland=false
+    local -a packages=() package_specs=() unhold_packages=()
     [[ -s "$APT_HOLD_STATE" ]] || {
         rm -f -- "$COMPONENT_STATE_DIR/kde.version"
         log "没有 Anland KDE 安装记录。" "No Anland KDE installation record was found."
@@ -187,9 +292,20 @@ uninstall_kde_deb() {
     command -v apt-cache >/dev/null 2>&1 || die "未找到 apt-cache。" "apt-cache was not found."
     command -v apt-get >/dev/null 2>&1 || die "未找到 apt-get。" "apt-get was not found."
     command -v apt-mark >/dev/null 2>&1 || die "未找到 apt-mark。" "apt-mark was not found."
+    if owner="$(other_xwayland_owner)"; then
+        preserve_xwayland=true
+        KDE_XWAYLAND_PRESERVED=true
+        KDE_XWAYLAND_OWNER="$owner"
+        log "检测到 Anland $owner，将保留共用的 patched Xwayland。" \
+            "Anland $owner is installed; preserving the shared patched Xwayland."
+    fi
     mapfile -t packages < <(sed -nE 's/^([a-z0-9][a-z0-9+.-]*)$/\1/p' "$APT_HOLD_STATE" | sort -u)
     ((${#packages[@]} > 0)) || die "APT hold 清单为空。" "The APT hold list is empty."
     for package in "${packages[@]}"; do
+        if [[ "$preserve_xwayland" == true && "$package" == xwayland ]]; then
+            continue
+        fi
+        unhold_packages+=("$package")
         candidate="$(apt-cache madison "$package" | awk -F '|' 'NR == 1 {
             value = $2
             gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
@@ -199,21 +315,32 @@ uninstall_kde_deb() {
             die "找不到 $package 的官方候选版本。" "No distribution candidate was found for $package."
         package_specs+=("$package=$candidate")
     done
-    apt-mark unhold "${packages[@]}" >/dev/null
-    apt-get install -y --reinstall --allow-downgrades --allow-change-held-packages \
+    ((${#unhold_packages[@]} == 0)) || apt-mark unhold "${unhold_packages[@]}" >/dev/null
+    ((${#package_specs[@]} == 0)) || apt-get install -y --reinstall --allow-downgrades --allow-change-held-packages \
         "${package_specs[@]}"
     rm -f -- "$APT_HOLD_STATE" "$COMPONENT_STATE_DIR/kde.version"
     rmdir -- "${APT_HOLD_STATE%/*}" 2>/dev/null || true
 }
 
 uninstall_kde_rpm() {
-    local dnf_conf="/etc/dnf/dnf.conf" backup stripped transaction
-    local -a packages=()
+    local dnf_conf="/etc/dnf/dnf.conf" backup stripped transaction package owner
+    local -a packages=() retained_packages=()
     command -v dnf >/dev/null 2>&1 || die "未找到 dnf。" "dnf was not found."
     command -v rpm >/dev/null 2>&1 || die "未找到 rpm。" "rpm was not found."
     [[ -f "$dnf_conf" ]] || die "找不到 DNF 配置。" "The DNF configuration was not found."
     mapfile -t packages < <(rpm -qa --queryformat '%{NAME}\n' |
         awk '/^kwin([a-zA-Z0-9+._-]*)$/ || /^xorg-x11-server-Xwayland([a-zA-Z0-9+._-]*)$/' | sort -u)
+    if owner="$(other_xwayland_owner)"; then
+        KDE_XWAYLAND_PRESERVED=true
+        KDE_XWAYLAND_OWNER="$owner"
+        log "检测到 Anland $owner，将保留共用的 patched Xwayland。" \
+            "Anland $owner is installed; preserving the shared patched Xwayland."
+        for package in "${packages[@]}"; do
+            [[ "$package" != xorg-x11-server-Xwayland* ]] || continue
+            retained_packages+=("$package")
+        done
+        packages=("${retained_packages[@]}")
+    fi
     ((${#packages[@]})) || {
         rm -f -- "$COMPONENT_STATE_DIR/kde.version"
         return 0
@@ -235,44 +362,35 @@ uninstall_kde_rpm() {
 }
 
 uninstall_kde_arch() {
-    local backup stripped niri_managed=false
-    local -a restore_packages=(kwin)
+    local backup owner
+    local -a restore_packages=(kwin) hold_removals=(kwin)
     command -v pacman >/dev/null 2>&1 || die "未找到 pacman。" "pacman was not found."
     [[ -f /etc/pacman.conf ]] || die "找不到 pacman.conf。" "pacman.conf was not found."
-    [[ -s "$COMPONENT_STATE_DIR/niri.version" ]] && niri_managed=true
-    if [[ "$niri_managed" == true ]]; then
+    if [[ ! -s "$COMPONENT_STATE_DIR/kde.version" ]] && \
+        [[ ! -s "$APT_HOLD_STATE" ]] && \
+        ! grep -Fqx "# BEGIN anland-kde package holds" /etc/pacman.conf 2>/dev/null && \
+        ! grep -Eq "^[[:space:]]*IgnorePkg[[:space:]]*=.*(^|[[:space:]])kwin([[:space:]]|$)" /etc/pacman.conf 2>/dev/null; then
+        log "没有 Anland KDE 安装记录。" "No Anland KDE installation record was found."
+        return 0
+    fi
+    if owner="$(other_xwayland_owner)"; then
         KDE_XWAYLAND_PRESERVED=true
-        log "检测到 Anland Niri，将保留共用的 patched xorg-xwayland。" \
-            "Anland Niri is installed; preserving the shared patched xorg-xwayland."
+        KDE_XWAYLAND_OWNER="$owner"
+        log "检测到 Anland $owner，将保留共用的 patched Xwayland。" \
+            "Anland $owner is installed; preserving the shared patched Xwayland."
     else
         restore_packages+=(xorg-xwayland)
+        hold_removals+=(xorg-xwayland)
     fi
     backup="$(mktemp -t anland-kde-uninstall.XXXXXXXX)"
-    stripped="$(mktemp -t anland-kde-uninstall.XXXXXXXX)"
     cp -p -- /etc/pacman.conf "$backup"
-    awk -v keep_xwayland="$niri_managed" '
-        /^[[:space:]]*IgnorePkg[[:space:]]*=/ {
-            equals = index($0, "=")
-            count = split(substr($0, equals + 1), items, /[[:space:]]+/)
-            output = ""
-            for (i = 1; i <= count; i++) {
-                if (items[i] != "" && items[i] != "kwin" &&
-                    (items[i] != "xorg-xwayland" || keep_xwayland == "true")) {
-                    output = output (output == "" ? "" : " ") items[i]
-                }
-            }
-            if (output != "") print "IgnorePkg = " output
-            next
-        }
-        { print }
-    ' /etc/pacman.conf > "$stripped"
-    if ! install -m 0644 "$stripped" /etc/pacman.conf || \
+    if ! remove_pacman_hold_entries "${hold_removals[@]}" || \
         ! pacman -S --noconfirm "${restore_packages[@]}"; then
         install -m 0644 "$backup" /etc/pacman.conf || true
-        rm -f -- "$backup" "$stripped"
+        rm -f -- "$backup"
         die "恢复发行版 KWin/Xwayland 失败。" "Failed to restore distribution KWin/Xwayland packages."
     fi
-    rm -f -- "$backup" "$stripped" "$COMPONENT_STATE_DIR/kde.version"
+    rm -f -- "$backup" "$COMPONENT_STATE_DIR/kde.version"
 }
 
 uninstall_kde() {
@@ -282,8 +400,8 @@ uninstall_kde() {
         pkg.tar.*) uninstall_kde_arch ;;
     esac
     if [[ "$KDE_XWAYLAND_PRESERVED" == true ]]; then
-        log "Anland KDE 已卸载，发行版 KWin 已恢复，共用的 patched Xwayland 仍由 Anland Niri 管理。" \
-            "Anland KDE was uninstalled and distribution KWin was restored; the shared patched Xwayland remains managed by Anland Niri."
+        log "Anland KDE 已卸载，发行版 KWin 已恢复，共用的 patched Xwayland 仍由 Anland ${KDE_XWAYLAND_OWNER} 管理。" \
+            "Anland KDE was uninstalled and distribution KWin was restored; the shared patched Xwayland remains managed by Anland ${KDE_XWAYLAND_OWNER}."
     else
         log "Anland KDE 已卸载，发行版 KWin/Xwayland 已恢复。" \
             "Anland KDE was uninstalled and distribution KWin/Xwayland packages were restored."
@@ -313,6 +431,7 @@ require_root() {
         "ANLAND_KDE_WORK_DIR=$WORK_DIR" \
         "ANLAND_KDE_PACKAGE_DIR=$PACKAGE_DIR" \
         "ANLAND_KDE_ARCHIVE_NAME=$ARCHIVE_NAME" \
+        "DROIDSPACES_COMPONENT_STATE_DIR=$COMPONENT_STATE_DIR" \
         "DROIDSPACES_DESKTOP_CONFIG=$DESKTOP_CONFIG" \
         bash "$script_path" "$@"; then
         status=0
@@ -334,7 +453,7 @@ detect_target() {
     local system_name="${PRETTY_NAME:-$distro_id${version_id:+ $version_id}}"
 
     case "$distro_id" in
-        arch|archarm)
+        arch|archarm|archlinux)
             TARGET="Arch Linux"
             PACKAGE_TYPE="pkg.tar.*"
             ARCHIVE_PREFIX="anland-kde-arch-kwin-"
@@ -476,8 +595,8 @@ resolve_archive_name() {
         checksum_count="$(awk -F= -v key="$checksum_key" '$1 == key { count += 1 } END { print count + 0 }' "$manifest_file")" || return 1
         case "$checksum_count" in
             0)
-                log "CNB 的旧 Release 清单没有 ${ARCHIVE_NAME} 的 SHA-256；将只执行归档结构和软件包元数据校验。" \
-                    "The legacy CNB Release manifest has no SHA-256 for ${ARCHIVE_NAME}; only archive structure and package metadata will be verified."
+                die "CNB Release 的 ${MANIFEST_NAME} 缺少 ${ARCHIVE_NAME} 的唯一 SHA-256 校验值，拒绝安装。" \
+                    "The CNB Release ${MANIFEST_NAME} has no unique SHA-256 digest for ${ARCHIVE_NAME}; refusing to install."
                 ;;
             1)
                 checksum="$(awk -F= -v key="$checksum_key" '$1 == key { print substr($0, index($0, "=") + 1) }' "$manifest_file")" || return 1
@@ -786,15 +905,23 @@ validate_release_asset_checksum() {
 
 validate_package_architecture() {
     local -a files=()
-    local file package_arch
+    local file package_arch package_name xwayland_count=0
 
     case "$PACKAGE_TYPE" in
         deb)
             mapfile -t files < <(find "$PACKAGE_DIR" -maxdepth 1 -type f -name '*.deb' -print | sort)
             for file in "${files[@]}"; do
-                package_arch="$(dpkg-deb -f "$file" Architecture)"
+                package_arch="$(dpkg-deb -f "$file" Architecture)" || return 1
+                package_name="$(dpkg-deb -f "$file" Package)" || return 1
                 case "$package_arch" in arm64|all) ;; *) return 1 ;; esac
+                case "$package_name" in
+                    kwin-data) ;;
+                    kwin|kwin-*|libkwin*) [[ "$package_arch" == arm64 ]] || return 1 ;;
+                    xwayland) [[ "$package_arch" == arm64 ]] || return 1; ((xwayland_count += 1)) ;;
+                    *) return 1 ;;
+                esac
             done
+            ((xwayland_count == 1))
             ;;
         rpm)
             mapfile -t files < <(find "$PACKAGE_DIR" -maxdepth 1 -type f -name '*.rpm' -print | sort)
@@ -1277,7 +1404,7 @@ install_rpm_packages() {
 
 install_arch_packages() {
     local -a files packages
-    local pacman_conf package
+    local pacman_conf
 
     command -v pacman >/dev/null 2>&1 || die "未找到 pacman。" "pacman was not found."
     mapfile -t files < <(find "$PACKAGE_DIR" -maxdepth 1 -type f -name '*.pkg.tar.*' -print | sort)
@@ -1300,33 +1427,16 @@ install_arch_packages() {
     fi
     rm -f -- "$pacman_conf"
 
-    for package in kwin xorg-xwayland; do
-        if ! awk -v package="$package" '
-            $1 == "IgnorePkg" {
-                for (i = 3; i <= NF; i++) {
-                    if ($i == package) {
-                        found = 1
-                    }
-                }
-            }
-            END { exit found ? 0 : 1 }
-        ' /etc/pacman.conf; then
-            if grep -qE '^[[:space:]]*IgnorePkg[[:space:]]*=' /etc/pacman.conf; then
-                sed -i -E "0,/^[[:space:]]*IgnorePkg[[:space:]]*=/{s/^([[:space:]]*IgnorePkg[[:space:]]*=.*)$/\\1 ${package}/}" /etc/pacman.conf
-            elif grep -qE '^\[options\][[:space:]]*$' /etc/pacman.conf; then
-                sed -i "/^\[options\][[:space:]]*$/a IgnorePkg = ${package}" /etc/pacman.conf
-            else
-                die "pacman.conf 缺少 [options] 段。" "pacman.conf has no [options] section."
-            fi
-        fi
-    done
+    if ! write_pacman_hold_block kwin xorg-xwayland; then
+        die "无法更新 pacman 锁定配置。" "Unable to update the pacman hold configuration."
+    fi
     mapfile -t packages < <(pacman -Qq -p "${files[@]}" | sort -u)
     ((${#packages[@]} > 0)) || die "无法读取 Arch 包名。" "Could not determine the Arch package names."
     printf '  hold: %s\n' "${packages[@]}"
 }
 
 main() {
-    local archive_version
+    local archive_version owner
     detect_language
     parse_arguments "$@"
     detect_target
@@ -1337,6 +1447,10 @@ main() {
         return
     fi
     require_runtime_dependencies
+    if owner="$(other_xwayland_owner)"; then
+        die "检测到 Anland $owner；KDE 与它共用 patched Xwayland；请先卸载该组件以避免覆盖。" \
+            "Anland $owner is installed; KDE shares patched Xwayland with it; uninstall that component first to avoid replacing it."
+    fi
     resolve_release_tag
     if [[ -n "$PREPARED_WORK_DIR" || -n "$PREPARED_PACKAGE_DIR" ]]; then
         use_prepared_packages
@@ -1345,10 +1459,6 @@ main() {
         download_packages
     fi
     require_root "$@"
-    if [[ "$PACKAGE_TYPE" == "pkg.tar.*" && -s "$COMPONENT_STATE_DIR/niri.version" ]]; then
-        die "检测到 Anland Niri。Niri 与 KDE 共用 patched xorg-xwayland；为避免覆盖，请先卸载 Anland Niri。" \
-            "Anland Niri is installed. Niri and KDE share patched xorg-xwayland; uninstall Anland Niri first to avoid replacing it."
-    fi
 
     case "$PACKAGE_TYPE" in
         deb) install_deb_packages ;;

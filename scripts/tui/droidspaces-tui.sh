@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-readonly TUI_VERSION="1.5"
+readonly TUI_VERSION="1.6"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_PATH="$SCRIPT_DIR/$(basename -- "${BASH_SOURCE[0]}")"
 readonly DESKTOP_CONFIG="${DROIDSPACES_DESKTOP_CONFIG:-/etc/droidspaces-desktop.conf}"
+readonly GPU_HELPER_LOCAL="$SCRIPT_DIR/droidspaces-gpu.sh"
+readonly GPU_HELPER_INSTALLED="/usr/local/bin/droidspaces-gpu"
 readonly HANGOVER_CACHE_DIR="/var/cache/hangover-wine"
 readonly HANGOVER_MANIFEST_NAME="hangover-wine-manifest"
 readonly COMPONENT_STATE_DIR="${DROIDSPACES_COMPONENT_STATE_DIR:-/var/lib/droidspaces-tui/components}"
@@ -63,6 +65,7 @@ COLOR_BLUE=""
 COLOR_CYAN=""
 COLOR_GREEN=""
 COLOR_YELLOW=""
+COLOR_LIGHT_YELLOW=""
 COLOR_RED=""
 COLOR_DIM=""
 
@@ -174,6 +177,7 @@ init_colors() {
         COLOR_CYAN=$'\033[36m'
         COLOR_GREEN=$'\033[32m'
         COLOR_YELLOW=$'\033[33m'
+        COLOR_LIGHT_YELLOW=$'\033[93m'
         COLOR_RED=$'\033[31m'
         COLOR_DIM=$'\033[2m'
     fi
@@ -543,14 +547,14 @@ component_supported() {
                 supports_common_packages
             else
                 case "$SYSTEM_ID:$SYSTEM_VERSION" in
-                    arch:*|archarm:*|debian:13*|ubuntu:24.04*|ubuntu:25.10*|ubuntu:26.04*|fedora:43*|fedora:44*) return 0 ;;
+                    arch:*|archarm:*|archlinux:*|debian:13*|ubuntu:24.04*|ubuntu:25.10*|ubuntu:26.04*|fedora:43*|fedora:44*) return 0 ;;
                     *) return 1 ;;
                 esac
             fi
             ;;
         kde)
             case "$SYSTEM_ID:$SYSTEM_VERSION" in
-                arch:*|archarm:*|debian:13*|ubuntu:26.04*|fedora:43*|fedora:44*) return 0 ;;
+                arch:*|archarm:*|archlinux:*|debian:13*|ubuntu:26.04*|fedora:43*|fedora:44*) return 0 ;;
                 *) return 1 ;;
             esac
             ;;
@@ -749,6 +753,14 @@ component_versions_match() {
         hangover)
             [[ "$current" == "$upstream"~* || "$current" == "$upstream"-[0-9]* ]]
             ;;
+        mesa)
+            current="${current#*:}"
+            [[ "$current" == "$upstream"-* ]]
+            ;;
+        fonts)
+            current="${current#*:}"
+            [[ "$current" == "$upstream"-* || "$current" == "$upstream"+* ]]
+            ;;
         kde|gnome)
             current="${current#*:}"
             [[ "$current" == "$upstream"-* ]]
@@ -786,7 +798,7 @@ component_release_parts() {
         hangover)
             tag="hangover-wine-packages"
             case "$SYSTEM_ID:$SYSTEM_VERSION" in
-                arch:*|archarm:*) prefix="hangover-wine-arch-"; suffix="-aarch64.tar.gz" ;;
+                arch:*|archarm:*|archlinux:*) prefix="hangover-wine-arch-"; suffix="-aarch64.tar.gz" ;;
                 debian:13*) prefix="hangover-wine-debian13-"; suffix="-arm64.tar.gz" ;;
                 ubuntu:24.04*) prefix="hangover-wine-ubuntu2404-"; suffix="-arm64.tar.gz" ;;
                 ubuntu:25.10*) prefix="hangover-wine-ubuntu2510-"; suffix="-arm64.tar.gz" ;;
@@ -804,7 +816,7 @@ component_release_parts() {
         kde)
             tag="anland-kde-packages"
             case "$SYSTEM_ID:$SYSTEM_VERSION" in
-                arch:*|archarm:*) prefix="anland-kde-arch-kwin-"; suffix="-aarch64.tar.gz" ;;
+                arch:*|archarm:*|archlinux:*) prefix="anland-kde-arch-kwin-"; suffix="-aarch64.tar.gz" ;;
                 debian:13*) prefix="anland-kde-debian13-kwin-"; suffix="-arm64.tar.gz" ;;
                 ubuntu:26.04*) prefix="anland-kde-ubuntu2604-kwin-"; suffix="-arm64.tar.gz" ;;
                 fedora:43*) prefix="anland-kde-fedora43-kwin-"; suffix="-aarch64.tar.gz" ;;
@@ -1186,10 +1198,19 @@ confirm_run() {
 }
 
 run_component() {
-    local component="$1"
-    local label="$2"
-    local installer status
+    local component="${1:-}"
+    local label="${2:-}"
+    local installer status skip_confirm=false argument
     local -a source_argument=()
+
+    if [[ $# -ge 2 ]]; then
+        shift 2
+    else
+        set --
+    fi
+    for argument in "$@"; do
+        [[ "$argument" != --choose-version ]] || skip_confirm=true
+    done
 
     clear_screen
     draw_header
@@ -1214,7 +1235,9 @@ run_component() {
 
     printf '%s: %s\n' "$(msg '安装器' 'Installer')" "$installer"
     printf '%s: %s\n\n' "$(msg '下载源' 'Source')" "$(source_label)"
-    confirm_run "$label" || return
+    if [[ "$skip_confirm" == false ]]; then
+        confirm_run "$label" || return
+    fi
 
     case "$DOWNLOAD_SOURCE" in
         1) source_argument=(--1) ;;
@@ -1225,7 +1248,7 @@ run_component() {
     printf '\n%b%s%b\n\n' "$COLOR_BLUE" \
         "$(msg '安装器开始运行。' 'Starting installer.')" "$COLOR_RESET"
     COMPONENT_REFRESH_REQUIRED=true
-    if "$installer" "${source_argument[@]}"; then
+    if "$installer" "${source_argument[@]}" "$@"; then
         status=0
     else
         status=$?
@@ -1351,6 +1374,30 @@ desktop_component_selection_menu() {
     done
 }
 
+gpu_helper() {
+    local helper="$GPU_HELPER_INSTALLED"
+    [[ ! -f "$GPU_HELPER_LOCAL" ]] || helper="$GPU_HELPER_LOCAL"
+    if [[ ! -f "$helper" || ! -r "$helper" ]]; then
+        printf '%s' "$(msg 'GPU 切换脚本未安装，请更新 TUI。' 'GPU helper is missing; update the TUI.')" >&2
+        return 1
+    fi
+    bash "$helper" "$@"
+}
+
+gpu_status_display() {
+    local scope="$1" api="$2" value
+    if ! value="$(gpu_helper --status "$scope" "$api" 2>/dev/null)"; then
+        printf '%s' "$(msg '未知' 'unknown')"
+        return
+    fi
+    value="${value//$'\n'/ }"
+    value="${value//$'\r'/ }"
+    if [[ -z "$value" ]]; then
+        value="$(msg '未指定' 'not specified')"
+    fi
+    printf '%s' "$value"
+}
+
 component_menu() {
     local component="$1" label="$2" choice read_status
     begin_dynamic_menu
@@ -1366,8 +1413,20 @@ component_menu() {
                 "${COMPONENT_CURRENT_VERSIONS[$component]}"
             printf '  %s: %s\n\n' "$(msg '上游版本' 'Upstream version')" \
                 "$(component_upstream_display "$component")"
+            if [[ "$component" == mesa ]]; then
+                printf '  %s: %b%s%b\n' "$(msg '当前 OpenGL 配置' 'Current OpenGL configuration')" "$COLOR_GREEN" "$(gpu_status_display current opengl)" "$COLOR_RESET"
+                printf '  %s: %b%s%b\n' "$(msg '下次启动 OpenGL 配置' 'Saved OpenGL configuration')" "$COLOR_LIGHT_YELLOW" "$(gpu_status_display saved opengl)" "$COLOR_RESET"
+                printf '  %s: %b%s%b\n' "$(msg '当前 Vulkan 配置' 'Current Vulkan configuration')" "$COLOR_GREEN" "$(gpu_status_display current vulkan)" "$COLOR_RESET"
+                printf '  %s: %b%s%b\n\n' "$(msg '下次启动 Vulkan 配置' 'Saved Vulkan configuration')" "$COLOR_LIGHT_YELLOW" "$(gpu_status_display saved vulkan)" "$COLOR_RESET"
+            fi
             printf '  %b[1]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '更新/安装' 'Update/install')"
             printf '  %b[2]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '卸载' 'Uninstall')"
+            if [[ "$component" == mesa ]]; then
+                printf '  %b[3]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '切换 OpenGL / Vulkan 路径' 'Switch OpenGL / Vulkan paths')"
+                printf '  %b[4]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '选择 Mesa 版本' 'Select Mesa version')"
+                printf '  %b[5]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '更新媒体解码驱动' 'Update media decode driver')"
+                printf '  %b[6]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '卸载媒体解码驱动' 'Uninstall media decode driver')"
+            fi
             printf '  %b[0]%b %s\n\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '返回' 'Back')"
         fi
         draw_dynamic_menu_prompt
@@ -1391,6 +1450,24 @@ component_menu() {
                 run_component_uninstall "$component" "$label"
                 return
                 ;;
+            3)
+                if [[ "$component" == mesa ]]; then
+                    restore_dynamic_menu_echo
+                    gpu_helper || pause_menu
+                    begin_dynamic_menu
+                fi
+                ;;
+            4|5|6)
+                if [[ "$component" == mesa ]]; then
+                    restore_dynamic_menu_echo
+                    case "$choice" in
+                        4) run_component mesa "$(msg '选择 Mesa 版本' 'Select Mesa version')" --choose-version --mesa-only ;;
+                        5) run_component mesa "$(msg '更新媒体解码驱动' 'Update media decode driver')" --media-only ;;
+                        6) run_component mesa "$(msg '卸载媒体解码驱动' 'Uninstall media decode driver')" --media-only --uninstall ;;
+                    esac
+                    return
+                fi
+                ;;
             0|q)
                 restore_dynamic_menu_echo
                 return
@@ -1404,7 +1481,7 @@ select_download_source() {
     while :; do
         clear_screen
         draw_header
-        printf '\n%b%s%b\n\n' "$COLOR_BOLD" "$(msg '选择下载源' 'Select download source')" "$COLOR_RESET"
+        printf '\n%b%s%b\n\n' "$COLOR_BOLD" "$(msg '安装器下载源' 'Installer download source')" "$COLOR_RESET"
         printf '  %b[1]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" \
             "$(msg '自动测速并由安装器提示选择' 'Probe sources and let the installer prompt')"
         printf '  %b[2]%b GitHub\n' "$COLOR_CYAN" "$COLOR_RESET"
@@ -1426,6 +1503,28 @@ select_download_source() {
             COMPONENT_REFRESH_REQUIRED=true
         fi
         return
+    done
+}
+
+source_settings_menu() {
+    local choice
+    while :; do
+        clear_screen
+        draw_header
+        printf '\n%b%s%b\n\n' "$COLOR_BOLD" "$(msg '软件源设置' 'Source settings')" "$COLOR_RESET"
+        printf '  %b[1]%b %s - %s\n' "$COLOR_CYAN" "$COLOR_RESET" \
+            "$(msg '安装器下载源' 'Installer download source')" "$(source_label)"
+        printf '  %b[2]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" \
+            "$(msg '系统软件源（LinuxMirrors）' 'System software mirrors (LinuxMirrors)')"
+        printf '  %b[0]%b %s\n\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '返回' 'Back')"
+        printf '%s: ' "$(msg '请选择' 'Select')"
+        IFS= read -r choice || return
+        case "$choice" in
+            1) select_download_source ;;
+            2) switch_system_mirrors ;;
+            0|q|Q) return ;;
+            *) continue ;;
+        esac
     done
 }
 
@@ -1901,8 +2000,37 @@ prepare_updater() {
     return 0
 }
 
+run_updater_install() {
+    local updater="$1" scope="$2" status
+    local -a source_argument=(--source "$DOWNLOAD_SOURCE")
+
+    printf '\n'
+    if "$updater" "${source_argument[@]}" --only "$scope" --yes; then
+        status=0
+    else
+        status=$?
+    fi
+    if ((status != 0)); then
+        printf '\n%b%s%b\n' "$COLOR_RED" \
+            "$(msg "更新失败，退出码：$status。" "Update failed with exit code $status.")" "$COLOR_RESET"
+        return "$status"
+    fi
+
+    if [[ "$scope" == tui || "$scope" == all ]]; then
+        if [[ -x "$INSTALLED_TUI_PATH" ]]; then
+            printf '\n%s\n' "$(msg 'TUI 已更新，正在重新启动。' 'The TUI was updated and will now restart.')"
+            # exec does not run the EXIT trap, so reclaim the component version
+            # worker directory explicitly before replacing this process.
+            stop_component_version_workers
+            cleanup_update_files
+            exec "$INSTALLED_TUI_PATH" --source "$DOWNLOAD_SOURCE"
+        fi
+    fi
+    return 0
+}
+
 run_update_check() {
-    local updater
+    local updater status output
     local -a source_argument=(--source "$DOWNLOAD_SOURCE")
 
     clear_screen
@@ -1917,17 +2045,49 @@ run_update_check() {
     fi
     updater="$UPDATE_UPDATER_PATH"
     source_argument=(--source "$DOWNLOAD_SOURCE")
-    if ! "$updater" "${source_argument[@]}" --check --only all; then
-        printf '\n%b%s%b\n' "$COLOR_RED" \
-            "$(msg '检查更新失败。' 'The update check failed.')" "$COLOR_RESET"
+    printf '%s\n\n' "$(msg '正在读取 Release 清单...' 'Reading the Release manifest...')"
+    if output="$("$updater" "${source_argument[@]}" --check --only all 2>&1)"; then
+        status=0
+    else
+        status=$?
     fi
+    printf '%s\n' "$output"
+
+    # 兼容旧版一次性安装器：它们发现更新时仍返回 0，只输出更新列表。
+    if ((status == 0)) && [[ "$output" == *"发现 "*"项需要安装或更新"* ]]; then
+        status=2
+    fi
+
+    case "$status" in
+        0)
+            printf '\n%b%s%b\n' "$COLOR_GREEN" \
+                "$(msg '当前已是最新版本。' 'Everything is up to date.')" "$COLOR_RESET"
+            ;;
+        2)
+            printf '\n%b%s%b\n' "$COLOR_YELLOW" \
+                "$(msg '发现可用更新。' 'Updates are available.')" "$COLOR_RESET"
+            if confirm_run "$(msg '安装全部更新' 'install all updates')"; then
+                if run_updater_install "$updater" all; then
+                    printf '\n%b%s%b\n' "$COLOR_GREEN" \
+                        "$(msg '更新完成。' 'Update completed.')" "$COLOR_RESET"
+                fi
+                cleanup_update_files
+                pause_menu
+                return
+            fi
+            ;;
+        *)
+            printf '\n%b%s%b\n' "$COLOR_RED" \
+                "$(msg "检查更新失败，退出码：$status。" \
+                    "The update check failed with exit code $status.")" "$COLOR_RESET"
+            ;;
+    esac
     cleanup_update_files
     pause_menu
 }
 
 run_update() {
-    local scope="$1" label="$2" updater status
-    local -a source_argument=(--source "$DOWNLOAD_SOURCE")
+    local scope="$1" label="$2"
 
     clear_screen
     draw_header
@@ -1940,28 +2100,10 @@ run_update() {
         pause_menu
         return
     fi
-    updater="$UPDATE_UPDATER_PATH"
-    source_argument=(--source "$DOWNLOAD_SOURCE")
-    printf '\n'
-    if "$updater" "${source_argument[@]}" --only "$scope" --yes; then
-        status=0
-    else
-        status=$?
-    fi
-    if ((status != 0)); then
+    if ! run_updater_install "$UPDATE_UPDATER_PATH" "$scope"; then
         cleanup_update_files
-        printf '\n%b%s%b\n' "$COLOR_RED" \
-            "$(msg "更新失败，退出码：$status。" "Update failed with exit code $status.")" "$COLOR_RESET"
         pause_menu
         return
-    fi
-
-    if [[ "$scope" == tui || "$scope" == all ]]; then
-        if [[ -x "$INSTALLED_TUI_PATH" ]]; then
-            printf '\n%s\n' "$(msg 'TUI 已更新，正在重新启动。' 'The TUI was updated and will now restart.')"
-            cleanup_update_files
-            exec "$INSTALLED_TUI_PATH" --source "$DOWNLOAD_SOURCE"
-        fi
     fi
     cleanup_update_files
     printf '\n%b%s%b\n' "$COLOR_GREEN" "$(msg '更新完成。' 'Update completed.')" "$COLOR_RESET"
@@ -1973,15 +2115,15 @@ manage_updates() {
     while :; do
         clear_screen
         draw_header
-        printf '\n%b%s%b\n\n' "$COLOR_BOLD" "$(msg '更新管理' 'Update management')" "$COLOR_RESET"
+        printf '\n%b%s%b\n\n' "$COLOR_BOLD" "$(msg '检查与安装更新' 'Check and install updates')" "$COLOR_RESET"
+        printf '  %s: %s\n' "$(msg '当前 TUI 版本' 'Current TUI version')" "$TUI_VERSION"
+        printf '  %s: %s\n\n' "$(msg '下载源' 'Source')" "$(source_label)"
         printf '  %b[1]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" \
-            "$(msg '检查更新' 'Check for updates')"
+            "$(msg '检查更新（发现后可安装）' 'Check for updates (install after check)')"
         printf '  %b[2]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" \
-            "$(msg '更新 TUI' 'Update the TUI')"
+            "$(msg '仅更新 TUI' 'Update the TUI only')"
         printf '  %b[3]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" \
-            "$(msg '更新受管安装脚本' 'Update managed installer scripts')"
-        printf '  %b[4]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" \
-            "$(msg '更新全部' 'Update everything')"
+            "$(msg '仅更新受管安装脚本' 'Update managed installer scripts only')"
         printf '  %b[0]%b %s\n\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '返回' 'Back')"
         printf '%s: ' "$(msg '请选择' 'Select')"
         IFS= read -r choice || return
@@ -1989,7 +2131,6 @@ manage_updates() {
             1) run_update_check ;;
             2) run_update tui "$(msg '更新 TUI' 'Update the TUI')" ;;
             3) run_update scripts "$(msg '更新受管安装脚本' 'Update managed installer scripts')" ;;
-            4) run_update all "$(msg '更新全部' 'Update everything')" ;;
             0|q|Q) return ;;
         esac
     done
@@ -2034,12 +2175,10 @@ main_menu() {
                     "$(desktop_selection_status_display)"
             fi
             printf '\n'
-            printf '  %b[S]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '切换下载源' 'Change download source')"
+            printf '  %b[S]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '软件源设置' 'Source settings')"
             printf '  %b[C]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '清理下载缓存' 'Clean download cache')"
             printf '  %b[R]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" \
                 "$(msg '回收存储空间（稀疏镜像）' 'Reclaim storage (sparse image)')"
-            printf '  %b[M]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" \
-                "$(msg '切换系统软件源' 'Switch system software mirrors')"
             printf '  %b[U]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '检查与安装更新' 'Check for and install updates')"
             printf '  %b[A]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '关于与支持范围' 'About and support')"
             printf '  %b[Q]%b %s\n\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '退出' 'Quit')"
@@ -2055,7 +2194,7 @@ main_menu() {
         choice="$MENU_CHOICE"
         [[ -n "$choice" ]] || continue
         case "${choice,,}" in
-            0|1|2|3|4|q|s|c|r|m|u|a) restore_dynamic_menu_echo ;;
+            0|1|2|3|4|q|s|c|r|u|a) restore_dynamic_menu_echo ;;
             *) continue ;;
         esac
         case "${choice,,}" in
@@ -2069,10 +2208,9 @@ main_menu() {
                     desktop_component_selection_menu
                 fi
                 ;;
-            s) select_download_source ;;
+            s) source_settings_menu ;;
             c) manage_cache ;;
             r) reclaim_sparse_storage ;;
-            m) switch_system_mirrors ;;
             u) manage_updates ;;
             a) show_about ;;
             q|0) return ;;

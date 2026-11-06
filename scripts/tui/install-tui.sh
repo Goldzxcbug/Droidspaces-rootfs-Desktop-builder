@@ -7,10 +7,10 @@ readonly MANIFEST_NAME="Gold-bug-tui-manifest"
 readonly GITHUB_API_URL="${DROIDSPACES_TUI_API_URL:-https://api.github.com}"
 readonly GITHUB_DOWNLOAD_BASE="${DROIDSPACES_TUI_GITHUB_BASE:-https://github.com/$RELEASE_REPOSITORY/releases/download}"
 readonly GITHUB_PROXY_BASE="${DROIDSPACES_TUI_PROXY_BASE:-https://gh-proxy.com/https://github.com/$RELEASE_REPOSITORY/releases/download}"
-readonly CNB_DOWNLOAD_BASE="${DROIDSPACES_TUI_CNB_BASE:-https://cnb.cool/goldzxcbug/droidspaces-package/-/releases/download}"
+readonly CNB_DOWNLOAD_BASE="${DROIDSPACES_TUI_CNB_BASE:-https://cnb.cool/$RELEASE_REPOSITORY/-/releases/download}"
 readonly TUI_TARGET="/usr/local/bin/droidspaces-tui"
 
-SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/$(basename -- "${BASH_SOURCE[0]}")"
+SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-}")" && pwd -P)/$(basename -- "${BASH_SOURCE[0]:-}")"
 DOWNLOAD_SOURCE="auto"
 UPDATE_SCOPE="all"
 CHECK_ONLY=false
@@ -48,6 +48,7 @@ usage() {
   --source auto|github|proxy|cnb  选择附件下载源（默认：auto）
   --only tui|scripts|all         只更新 TUI、受管脚本或全部（默认：all）
   --check                        只检查，不写入系统
+                                 退出码：0=已是最新，2=有更新，1=检查失败
   -y, --yes                      不询问，直接安装
   -h, --help                     显示帮助
 
@@ -132,6 +133,12 @@ ensure_root() {
     ((EUID == 0)) && return
     command -v sudo >/dev/null 2>&1 || die '安装需要 root 权限，且系统未安装 sudo。'
     exec sudo --preserve-env=LANG,LC_ALL,LC_MESSAGES -- bash "$SCRIPT_PATH" "${ORIGINAL_ARGUMENTS[@]}"
+}
+
+require_script_file() {
+    if [[ -z "${BASH_SOURCE[0]:-}" || -d "$SCRIPT_PATH" ]]; then
+        die "无法通过管道运行本脚本；请先下载脚本再运行，例如 curl -fsSLO $GITHUB_DOWNLOAD_BASE/$RELEASE_TAG/install-tui.sh && sudo bash install-tui.sh。Cannot run through a pipe; download the script first, e.g. curl -fsSLO $GITHUB_DOWNLOAD_BASE/$RELEASE_TAG/install-tui.sh && sudo bash install-tui.sh."
+    fi
 }
 
 fetch_release_metadata() {
@@ -285,7 +292,7 @@ parse_manifest() {
         case "$role" in tui|bootstrap|installer) ;; *) die "TUI 清单包含无效类型：$role" ;; esac
         safe_asset_name "$asset" || die "TUI 清单包含不安全的附件名：$asset"
         case "$asset:$role:$target" in
-            "droidspaces-tui.sh:tui:$TUI_TARGET"|"install-tui.sh:bootstrap:-") ;;
+            "droidspaces-tui.sh:tui:$TUI_TARGET"|"droidspaces-gpu.sh:tui:/usr/local/bin/droidspaces-gpu"|"install-tui.sh:bootstrap:-") ;;
             install-*.sh:installer:/usr/local/sbin/install-*)
                 [[ "$target" == "/usr/local/sbin/${asset%.sh}" ]] || \
                     die "安装脚本与目标路径不匹配：$asset"
@@ -308,9 +315,11 @@ parse_manifest() {
 
     [[ "$format" == 1 && "$tag" == "$RELEASE_TAG" && "$seen_header" == true ]] || \
         die 'TUI 清单格式或 Release tag 无效。'
-    ((${#ASSET_NAMES[@]} >= 3)) || die 'TUI 清单没有包含必要脚本。'
+    ((${#ASSET_NAMES[@]} >= 2)) || die 'TUI 清单没有包含必要脚本。'
     [[ "${seen_assets[droidspaces-tui.sh]:-}" == 1 && \
        "${seen_assets[install-tui.sh]:-}" == 1 ]] || die 'TUI 清单缺少核心脚本。'
+    # GPU 脚本属于可选项：旧版清单没有它也能正常工作。清单一旦包含它，
+    # 上面的资产名/角色/目标映射与重复检查已经保证记录唯一且合法。
 }
 
 reset_manifest_state() {
@@ -493,6 +502,7 @@ main() {
     local index asset_sha asset_size manifest_after before_sha after_sha
 
     parse_arguments "$@"
+    require_script_file
     require_commands
     if [[ "$CHECK_ONLY" == false ]]; then
         ensure_root
@@ -510,7 +520,8 @@ main() {
             ;;
         auto)
             if ! load_github_manifest; then
-                log 'GitHub Release 元数据不可用，改用 CNB 清单。'
+                log '警告：GitHub Release 元数据不可用，将改用 CNB 清单（不经 GitHub Release API 校验）。'
+                log 'Warning: GitHub Release metadata is unavailable; falling back to the CNB manifest without GitHub Release API verification.'
                 DOWNLOAD_SOURCE=cnb
                 load_cnb_manifest || die '无法从 GitHub 或 CNB 取得 TUI 清单。'
             fi
@@ -530,7 +541,8 @@ main() {
             printf '  %s -> %s\n' "${ASSET_NAMES[$index]}" "${ASSET_TARGETS[$index]}"
         done
         aliases_need_update && printf '  %s\n' '命令别名 dstui / ds-tui'
-        exit 0
+        # 2 表示“检查成功且存在可用更新”，供 TUI 区分已是最新与检查失败。
+        exit 2
     fi
     confirm_install
 

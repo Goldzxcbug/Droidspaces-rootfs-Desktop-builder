@@ -15,6 +15,7 @@ readonly GITHUB_RELEASE_URL="https://github.com"
 readonly GITHUB_API_URL="https://api.github.com"
 readonly GH_PROXY_RELEASE_URL="https://gh-proxy.com/https://github.com"
 readonly CNB_RELEASE_URL="https://cnb.cool"
+readonly COMPONENT_NAME="niri"
 readonly APT_HOLD_STATE="/var/lib/anland-niri/apt-holds"
 readonly DNF_MANAGED_BEGIN="# BEGIN anland-niri package holds"
 readonly DNF_MANAGED_END="# END anland-niri package holds"
@@ -178,23 +179,105 @@ parse_arguments() {
 }
 
 other_xwayland_owner() {
-    local component
-    for component in kde gnome niri hyprland mango denial; do
-        [[ "$component" != niri ]] || continue
-        if [[ -s "$COMPONENT_STATE_DIR/$component.version" ||
-              -s "/var/lib/anland-$component/apt-holds" || -s "/var/lib/anland-$component/pacman-packages" ]] ||
+    local component state_file
+    for component in kde gnome niri hyprland mango denial next; do
+        [[ "$component" != "$COMPONENT_NAME" ]] || continue
+        state_file="$COMPONENT_STATE_DIR/$component.version"
+        [[ "$component" == next ]] && state_file="$COMPONENT_STATE_DIR/anland-next.version"
+        if [[ -s "$state_file" ||
+              -s "/var/lib/anland-$component/apt-holds" ||
+              -s "/var/lib/anland-$component/pacman-packages" ]] ||
             grep -Fqx "# BEGIN anland-$component package holds" /etc/pacman.conf /etc/dnf/dnf.conf 2>/dev/null; then
-            printf '%s' "$component"; return 0
+            printf '%s' "$component"
+            return 0
         fi
     done
-    # Legacy Arch KDE/GNOME installers added plain IgnorePkg entries.
     local legacy
     for legacy in kwin mutter; do
+        [[ "$legacy" == kwin && "$COMPONENT_NAME" == kde ]] && continue
+        [[ "$legacy" == mutter && "$COMPONENT_NAME" == gnome ]] && continue
         if grep -Eq "^[[:space:]]*IgnorePkg[[:space:]]*=.*(^|[[:space:]])${legacy}([[:space:]]|$)" /etc/pacman.conf 2>/dev/null; then
-            printf '%s' "$legacy"; return 0
+            printf '%s' "$legacy"
+            return 0
         fi
     done
     return 1
+}
+
+write_pacman_hold_block() {
+    local -a packages=("$@")
+    local temporary
+    ((${#packages[@]} > 0)) || return 0
+    command -v pacman >/dev/null 2>&1 || return 0
+    [[ -f /etc/pacman.conf ]] || return 0
+    temporary="$(mktemp -t "anland-$COMPONENT_NAME-pacman.XXXXXXXX")" || return 1
+    if ! awk -v begin="# BEGIN anland-$COMPONENT_NAME package holds" \
+        -v end="# END anland-$COMPONENT_NAME package holds" \
+        -v packages="${packages[*]}" '
+        $0 == begin { skip = 1; next }
+        $0 == end { skip = 0; next }
+        skip { next }
+        /^\[options\][[:space:]]*$/ && !wrote {
+            print
+            print begin
+            print "IgnorePkg = " packages
+            print end
+            wrote = 1
+            next
+        }
+        { print }
+        END { if (skip) exit 1; if (!wrote) exit 1 }
+    ' /etc/pacman.conf > "$temporary"; then
+        rm -f -- "$temporary"
+        return 1
+    fi
+    if ! install -m 0644 -- "$temporary" /etc/pacman.conf; then
+        rm -f -- "$temporary"
+        return 1
+    fi
+    rm -f -- "$temporary"
+}
+
+remove_pacman_hold_entries() {
+    local -a packages=("$@")
+    local temporary
+    command -v pacman >/dev/null 2>&1 || return 0
+    [[ -f /etc/pacman.conf ]] || return 0
+    temporary="$(mktemp -t "anland-$COMPONENT_NAME-pacman.XXXXXXXX")" || return 1
+    if ! awk -v begin="# BEGIN anland-$COMPONENT_NAME package holds" \
+        -v end="# END anland-$COMPONENT_NAME package holds" \
+        -v remove_list="${packages[*]}" '
+        BEGIN { remove_count = split(remove_list, remove_names, /[[:space:]]+/) }
+        $0 == begin { inside = 1; next }
+        $0 == end { inside = 0; next }
+        inside { next }
+        /^# BEGIN .* package holds$/ { foreign = 1; print; next }
+        /^# END .* package holds$/ { foreign = 0; print; next }
+        foreign { print; next }
+        /^[[:space:]]*IgnorePkg[[:space:]]*=/ {
+            equals = index($0, "=")
+            count = split(substr($0, equals + 1), items, /[[:space:]]+/)
+            output = ""
+            for (i = 1; i <= count; i++) {
+                remove = 0
+                for (j = 1; j <= remove_count; j++) {
+                    if (items[i] == remove_names[j]) remove = 1
+                }
+                if (items[i] != "" && !remove) output = output (output == "" ? "" : " ") items[i]
+            }
+            if (output != "") print substr($0, 1, equals) " " output
+            next
+        }
+        { print }
+    ' /etc/pacman.conf > "$temporary"; then
+        rm -f -- "$temporary"
+        return 1
+    fi
+    if ! install -m 0644 -- "$temporary" /etc/pacman.conf; then
+        rm -f -- "$temporary"
+        return 1
+    fi
+    rm -f -- "$temporary"
 }
 
 uninstall_package_action() {
@@ -229,8 +312,14 @@ uninstall_niri_deb() {
         return 0
     fi
     local -a unhold_packages=()
+    local handled=0
     for package in "${packages[@]}"; do
-        action="$(uninstall_package_action "$package")" || die "安装记录含未知软件包。" "The installation record contains an unknown package."
+        if ! action="$(uninstall_package_action "$package")"; then
+            log "跳过未知软件包：${package}（可能来自更新版本的安装记录）。" \
+                "Skipping unknown package: ${package} (it may come from a newer installation record)."
+            continue
+        fi
+        handled=$((handled + 1))
         [[ "$action" != keep ]] || continue
         unhold_packages+=("$package")
         if [[ "$action" == remove ]]; then
@@ -249,6 +338,9 @@ uninstall_niri_deb() {
         [[ -n "$candidate" ]] || die "找不到 $package 的官方候选版本。" "No distribution candidate was found for $package."
         package_specs+=("$package=$candidate")
     done
+    if ((handled == 0 && ${#packages[@]} > 0)); then
+        die "安装记录含未知软件包。" "The installation record contains an unknown package."
+    fi
     ((${#unhold_packages[@]} == 0)) || apt-mark unhold "${unhold_packages[@]}" >/dev/null
     ((${#package_specs[@]} == 0)) || apt-get install -y --reinstall --allow-downgrades --allow-change-held-packages "${package_specs[@]}"
     ((${#remove_packages[@]} == 0)) || apt-get remove -y --allow-change-held-packages "${remove_packages[@]}"
@@ -270,14 +362,23 @@ uninstall_niri_rpm() {
         return 0
     fi
     mapfile -t packages < <(rpm -qa --queryformat '%{NAME}\n' | awk '/^(niri-anland|xwayland-satellite|xorg-x11-server-Xwayland)$/' | sort -u)
+    local handled=0
     for package in "${packages[@]}"; do
-        action="$(uninstall_package_action "$package")" || die "检测到未知软件包。" "An unknown package was detected."
+        if ! action="$(uninstall_package_action "$package")"; then
+            log "跳过未知软件包：${package}（可能来自更新版本的安装记录）。" \
+                "Skipping unknown package: ${package} (it may come from a newer installation record)."
+            continue
+        fi
+        handled=$((handled + 1))
         case "$action" in
             keep) ;;
             remove) remove_packages+=("$package") ;;
             *) restore_packages+=("$package") ;;
         esac
     done
+    if ((handled == 0 && ${#packages[@]} > 0)); then
+        die "检测到未知软件包。" "An unknown package was detected."
+    fi
     if other_xwayland_owner >/dev/null; then preserve_xwayland=true; fi
     backup="$(mktemp -t anland-niri-uninstall.XXXXXXXX)"
     stripped="$(mktemp -t anland-niri-uninstall.XXXXXXXX)"
@@ -299,7 +400,7 @@ uninstall_niri_rpm() {
 }
 
 uninstall_niri_arch() {
-    local package action backup stripped
+    local package action backup
     local -a packages=() restore_packages=() remove_packages=()
     command -v pacman >/dev/null 2>&1 || die "未找到 pacman。" "pacman was not found."
     [[ -f /etc/pacman.conf ]] || die "找不到 pacman.conf。" "pacman.conf was not found."
@@ -307,9 +408,16 @@ uninstall_niri_arch() {
         log "没有 Anland Niri 安装记录。" "No Anland Niri installation record was found."
         return 0
     fi
-    for package in niri-anland xorg-xwayland; do
+    local handled=0 found=0
+    for package in niri-anland xwayland-satellite xorg-xwayland; do
         pacman -Q "$package" >/dev/null 2>&1 || continue
-        action="$(uninstall_package_action "$package")" || die "检测到未知软件包。" "An unknown package was detected."
+        found=$((found + 1))
+        if ! action="$(uninstall_package_action "$package")"; then
+            log "跳过未知软件包：${package}（可能来自更新版本的安装记录）。" \
+                "Skipping unknown package: ${package} (it may come from a newer installation record)."
+            continue
+        fi
+        handled=$((handled + 1))
         [[ "$action" != keep ]] || continue
         packages+=("$package")
         if [[ "$action" == remove ]]; then
@@ -318,35 +426,19 @@ uninstall_niri_arch() {
             restore_packages+=("$package")
         fi
     done
+    if ((handled == 0 && found > 0)); then
+        die "检测到未知软件包。" "An unknown package was detected."
+    fi
     backup="$(mktemp -t anland-niri-uninstall.XXXXXXXX)"
-    stripped="$(mktemp -t anland-niri-uninstall.XXXXXXXX)"
     cp -p -- /etc/pacman.conf "$backup"
-    if ! awk -v remove_list="${packages[*]}" \
-        -v begin="# BEGIN anland-niri package holds" -v end="# END anland-niri package holds" '
-        $0 == begin || $0 == end { next }
-        BEGIN { remove_count = split(remove_list, remove_names, /[[:space:]]+/) }
-        /^[[:space:]]*IgnorePkg[[:space:]]*=/ {
-            equals = index($0, "=")
-            count = split(substr($0, equals + 1), items, /[[:space:]]+/)
-            output = ""
-            for (i = 1; i <= count; i++) {
-                remove = 0
-                for (j = 1; j <= remove_count; j++) if (items[i] == remove_names[j]) remove = 1
-                if (items[i] != "" && !remove) output = output (output == "" ? "" : " ") items[i]
-            }
-            if (output != "") print substr($0, 1, equals) " " output
-            next
-        }
-        { print }
-    ' /etc/pacman.conf > "$stripped" || \
-        ! install -m 0644 "$stripped" /etc/pacman.conf || \
+    if ! remove_pacman_hold_entries "${packages[@]}" || \
         ! { ((${#remove_packages[@]} == 0)) || pacman -R --noconfirm "${remove_packages[@]}"; } || \
         ! { ((${#restore_packages[@]} == 0)) || pacman -S --noconfirm "${restore_packages[@]}"; }; then
         install -m 0644 "$backup" /etc/pacman.conf || true
-        rm -f -- "$backup" "$stripped"
+        rm -f -- "$backup"
         die "卸载 Anland Niri 或恢复发行版图形包失败。" "Failed to uninstall Anland Niri or restore distribution graphics packages."
     fi
-    rm -f -- "$backup" "$stripped" "$COMPONENT_STATE_DIR/niri.version" \
+    rm -f -- "$backup" "$COMPONENT_STATE_DIR/niri.version" \
         "${APT_HOLD_STATE%/*}/packages.tsv"
     rmdir -- "${APT_HOLD_STATE%/*}" 2>/dev/null || true
 }
@@ -548,8 +640,8 @@ resolve_archive_name() {
         checksum_count="$(awk -F= -v key="$checksum_key" '$1 == key { count += 1 } END { print count + 0 }' "$manifest_file")" || return 1
         case "$checksum_count" in
             0)
-                log "CNB 的旧 Release 清单没有 ${ARCHIVE_NAME} 的 SHA-256；将只执行归档结构和软件包元数据校验。" \
-                    "The legacy CNB Release manifest has no SHA-256 for ${ARCHIVE_NAME}; only archive structure and package metadata will be verified."
+                die "CNB Release 的 ${MANIFEST_NAME} 缺少 ${ARCHIVE_NAME} 的唯一 SHA-256 校验值。" \
+                    "The CNB Release ${MANIFEST_NAME} has no unique SHA-256 digest for ${ARCHIVE_NAME}."
                 ;;
             1)
                 checksum="$(awk -F= -v key="$checksum_key" '$1 == key { print substr($0, index($0, "=") + 1) }' "$manifest_file")" || return 1
@@ -1380,7 +1472,7 @@ install_arch_dependencies() {
 
 install_arch_packages() {
     local -a files packages
-    local pacman_conf package
+    local pacman_conf
 
     command -v pacman >/dev/null 2>&1 || die "未找到 pacman。" "pacman was not found."
     mapfile -t files < <(find "$PACKAGE_DIR" -maxdepth 1 -type f -name '*.pkg.tar.*' -print | sort)
@@ -1404,27 +1496,9 @@ install_arch_packages() {
     fi
     rm -f -- "$pacman_conf"
 
-    sed -i '/^# BEGIN anland-niri package holds$/d; /^# END anland-niri package holds$/d' /etc/pacman.conf
-    for package in niri-anland xorg-xwayland; do
-        if ! awk -v package="$package" '
-            $1 == "IgnorePkg" {
-                for (i = 3; i <= NF; i++) {
-                    if ($i == package) {
-                        found = 1
-                    }
-                }
-            }
-            END { exit found ? 0 : 1 }
-        ' /etc/pacman.conf; then
-            if grep -qE '^[[:space:]]*IgnorePkg[[:space:]]*=' /etc/pacman.conf; then
-                sed -i -E "0,/^[[:space:]]*IgnorePkg[[:space:]]*=/{s/^([[:space:]]*IgnorePkg[[:space:]]*=.*)$/\\1 ${package}/}" /etc/pacman.conf
-            elif grep -qE '^\[options\][[:space:]]*$' /etc/pacman.conf; then
-                sed -i "/^\[options\][[:space:]]*$/a IgnorePkg = ${package}" /etc/pacman.conf
-            else
-                die "pacman.conf 缺少 [options] 段。" "pacman.conf has no [options] section."
-            fi
-        fi
-    done
+    if ! write_pacman_hold_block niri-anland xwayland-satellite xorg-xwayland; then
+        die "无法更新 pacman 锁定配置。" "Unable to update the pacman hold configuration."
+    fi
     mapfile -t packages < <(pacman -Qq -p "${files[@]}" | sort -u)
     ((${#packages[@]} > 0)) || die "无法读取 Arch 包名。" "Could not determine the Arch package names."
     printf '  hold: %s\n' "${packages[@]}"

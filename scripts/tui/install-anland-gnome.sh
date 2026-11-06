@@ -22,7 +22,8 @@ readonly DNF_MANAGED_END="# END anland-gnome package holds"
 readonly MESA_DNF_MANAGED_BEGIN="# BEGIN install-mesa package holds"
 readonly MESA_DNF_MANAGED_END="# END install-mesa package holds"
 readonly SYSTEMD257_STATE="/etc/droidspaces-systemd257"
-readonly COMPONENT_STATE_DIR="/var/lib/droidspaces-tui/components"
+readonly COMPONENT_NAME="gnome"
+readonly COMPONENT_STATE_DIR="${DROIDSPACES_COMPONENT_STATE_DIR:-/var/lib/droidspaces-tui/components}"
 readonly DESKTOP_CONFIG="${DROIDSPACES_DESKTOP_CONFIG:-/etc/droidspaces-desktop.conf}"
 
 WORK_DIR=""
@@ -176,9 +177,36 @@ parse_arguments() {
     done
 }
 
+other_xwayland_owner() {
+    local component state_file
+    for component in kde gnome niri hyprland mango denial next; do
+        [[ "$component" != "$COMPONENT_NAME" ]] || continue
+        state_file="$COMPONENT_STATE_DIR/$component.version"
+        [[ "$component" == next ]] && state_file="$COMPONENT_STATE_DIR/anland-next.version"
+        if [[ -s "$state_file" ||
+              -s "/var/lib/anland-$component/apt-holds" ||
+              -s "/var/lib/anland-$component/pacman-packages" ]] ||
+            grep -Fqx "# BEGIN anland-$component package holds" /etc/pacman.conf /etc/dnf/dnf.conf 2>/dev/null; then
+            printf '%s' "$component"
+            return 0
+        fi
+    done
+    local legacy
+    for legacy in kwin mutter; do
+        [[ "$legacy" == kwin && "$COMPONENT_NAME" == kde ]] && continue
+        [[ "$legacy" == mutter && "$COMPONENT_NAME" == gnome ]] && continue
+        if grep -Eq "^[[:space:]]*IgnorePkg[[:space:]]*=.*(^|[[:space:]])${legacy}([[:space:]]|$)" /etc/pacman.conf 2>/dev/null; then
+            printf '%s' "$legacy"
+            return 0
+        fi
+    done
+    return 1
+}
+
 uninstall_gnome_deb() {
-    local package candidate
-    local -a packages=() package_specs=()
+    local package candidate owner
+    local -a packages=() unhold_packages=() package_specs=()
+    local preserve_xwayland=false
     [[ -s "$APT_HOLD_STATE" ]] || {
         rm -f -- "$COMPONENT_STATE_DIR/gnome.version"
         log "没有 Anland GNOME 安装记录。" "No Anland GNOME installation record was found."
@@ -189,7 +217,15 @@ uninstall_gnome_deb() {
     command -v apt-mark >/dev/null 2>&1 || die "未找到 apt-mark。" "apt-mark was not found."
     mapfile -t packages < <(sed -nE 's/^([a-z0-9][a-z0-9+.-]*)$/\1/p' "$APT_HOLD_STATE" | sort -u)
     ((${#packages[@]} > 0)) || die "APT hold 清单为空。" "The APT hold list is empty."
+    if owner="$(other_xwayland_owner)"; then
+        preserve_xwayland=true
+        log "检测到 Anland ${owner}，将保留共用的 patched xwayland。" \
+            "Anland ${owner} is installed; preserving the shared patched xwayland."
+    fi
     for package in "${packages[@]}"; do
+        if [[ "$preserve_xwayland" == true && "$package" == xwayland ]]; then
+            continue
+        fi
         candidate="$(apt-cache madison "$package" | awk -F '|' 'NR == 1 {
             value = $2
             gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
@@ -197,11 +233,13 @@ uninstall_gnome_deb() {
         }')"
         [[ -n "$candidate" ]] || \
             die "找不到 $package 的官方候选版本。" "No distribution candidate was found for $package."
+        unhold_packages+=("$package")
         package_specs+=("$package=$candidate")
     done
-    apt-mark unhold "${packages[@]}" >/dev/null
-    apt-get install -y --reinstall --allow-downgrades --allow-change-held-packages \
-        "${package_specs[@]}"
+    ((${#unhold_packages[@]} == 0)) || apt-mark unhold "${unhold_packages[@]}" >/dev/null
+    ((${#package_specs[@]} == 0)) || \
+        apt-get install -y --reinstall --allow-downgrades --allow-change-held-packages \
+            "${package_specs[@]}"
     rm -f -- "$APT_HOLD_STATE" "$COMPONENT_STATE_DIR/gnome.version"
     rmdir -- "${APT_HOLD_STATE%/*}" 2>/dev/null || true
     log "Anland GNOME 已卸载，发行版 Mutter/Xwayland 已恢复。" \
@@ -209,8 +247,9 @@ uninstall_gnome_deb() {
 }
 
 uninstall_gnome_rpm() {
-    local dnf_conf="/etc/dnf/dnf.conf" backup stripped transaction
-    local -a packages=()
+    local dnf_conf="/etc/dnf/dnf.conf" backup stripped transaction package owner
+    local -a packages=() restore_packages=()
+    local preserve_xwayland=false
     command -v dnf >/dev/null 2>&1 || die "未找到 dnf。" "dnf was not found."
     command -v rpm >/dev/null 2>&1 || die "未找到 rpm。" "rpm was not found."
     [[ -f "$dnf_conf" ]] || die "找不到 DNF 配置。" "The DNF configuration was not found."
@@ -220,6 +259,17 @@ uninstall_gnome_rpm() {
         rm -f -- "$COMPONENT_STATE_DIR/gnome.version"
         return 0
     }
+    if owner="$(other_xwayland_owner)"; then
+        preserve_xwayland=true
+        log "检测到 Anland ${owner}，将保留共用的 patched xorg-x11-server-Xwayland。" \
+            "Anland ${owner} is installed; preserving the shared patched xorg-x11-server-Xwayland."
+    fi
+    for package in "${packages[@]}"; do
+        if [[ "$preserve_xwayland" == true && "$package" == xorg-x11-server-Xwayland* ]]; then
+            continue
+        fi
+        restore_packages+=("$package")
+    done
     backup="$(mktemp -t anland-gnome-uninstall.XXXXXXXX)"
     stripped="$(mktemp -t anland-gnome-uninstall.XXXXXXXX)"
     transaction="$(mktemp -t anland-gnome-uninstall.XXXXXXXX)"
@@ -227,8 +277,8 @@ uninstall_gnome_rpm() {
     if ! rewrite_dnf_config_without_managed_block "$dnf_conf" "$stripped" || \
         ! rewrite_dnf_config_for_package_install "$stripped" "$transaction" || \
         ! install -m 0644 "$transaction" "$dnf_conf" || \
-        ! dnf distro-sync -y --exclude='mesa*' --exclude='systemd*' "${packages[@]}" || \
-        ! dnf reinstall -y --exclude='mesa*' --exclude='systemd*' "${packages[@]}"; then
+        ! { ((${#restore_packages[@]} == 0)) || dnf distro-sync -y --exclude='mesa*' --exclude='systemd*' "${restore_packages[@]}"; } || \
+        ! { ((${#restore_packages[@]} == 0)) || dnf reinstall -y --exclude='mesa*' --exclude='systemd*' "${restore_packages[@]}"; }; then
         install -m 0644 "$backup" "$dnf_conf" || true
         rm -f -- "$backup" "$stripped" "$transaction"
         die "恢复发行版 Mutter/Xwayland 失败。" "Failed to restore distribution Mutter/Xwayland packages."
@@ -237,8 +287,9 @@ uninstall_gnome_rpm() {
 }
 
 uninstall_gnome_arch() {
-    local package backup stripped
-    local -a packages=()
+    local package backup owner
+    local -a packages=() restore_packages=()
+    local preserve_xwayland=false
 
     command -v pacman >/dev/null 2>&1 || die "未找到 pacman。" "pacman was not found."
     [[ -f /etc/pacman.conf ]] || die "找不到 pacman.conf。" "pacman.conf was not found."
@@ -267,40 +318,28 @@ uninstall_gnome_arch() {
     fi
     ((${#packages[@]} > 0)) || die "Arch 软件包恢复清单为空。" "The Arch package restore list is empty."
 
-    backup="$(mktemp -t anland-gnome-uninstall.XXXXXXXX)"
-    stripped="$(mktemp -t anland-gnome-uninstall.XXXXXXXX)"
-    cp -p -- /etc/pacman.conf "$backup"
-    if ! awk -v remove_list="${packages[*]}" '
-        BEGIN { remove_count = split(remove_list, remove_names, /[[:space:]]+/) }
-        /^[[:space:]]*IgnorePkg[[:space:]]*=/ {
-            equals = index($0, "=")
-            count = split(substr($0, equals + 1), items, /[[:space:]]+/)
-            output = ""
-            for (i = 1; i <= count; i++) {
-                remove = 0
-                for (j = 1; j <= remove_count; j++) {
-                    if (items[i] == remove_names[j]) remove = 1
-                }
-                if (items[i] != "" && !remove) {
-                    output = output (output == "" ? "" : " ") items[i]
-                }
-            }
-            if (output != "") print substr($0, 1, equals) " " output
-            next
-        }
-        { print }
-    ' /etc/pacman.conf > "$stripped"; then
-        rm -f -- "$backup" "$stripped"
-        die "无法处理 pacman.conf。" "Could not process pacman.conf."
+    if owner="$(other_xwayland_owner)"; then
+        preserve_xwayland=true
+        log "检测到 Anland ${owner}，将保留共用的 patched xorg-xwayland。" \
+            "Anland ${owner} is installed; preserving the shared patched xorg-xwayland."
     fi
-    if ! install -m 0644 -- "$stripped" /etc/pacman.conf || \
-        ! pacman -S --noconfirm "${packages[@]}"; then
+    for package in "${packages[@]}"; do
+        if [[ "$preserve_xwayland" == true && "$package" == xorg-xwayland ]]; then
+            continue
+        fi
+        restore_packages+=("$package")
+    done
+
+    backup="$(mktemp -t anland-gnome-uninstall.XXXXXXXX)"
+    cp -p -- /etc/pacman.conf "$backup"
+    if ! remove_pacman_hold_entries "${restore_packages[@]}" || \
+        ! { ((${#restore_packages[@]} == 0)) || pacman -S --noconfirm "${restore_packages[@]}"; }; then
         install -m 0644 -- "$backup" /etc/pacman.conf || true
-        rm -f -- "$backup" "$stripped"
+        rm -f -- "$backup"
         die "恢复发行版 Mutter/Xwayland 失败。" "Failed to restore the distribution Mutter/Xwayland packages."
     fi
 
-    rm -f -- "$backup" "$stripped" "$PACMAN_PACKAGE_STATE" \
+    rm -f -- "$backup" "$PACMAN_PACKAGE_STATE" \
         "$APT_HOLD_STATE" "$COMPONENT_STATE_DIR/gnome.version"
     rmdir -- "${PACMAN_PACKAGE_STATE%/*}" 2>/dev/null || true
     log "Anland GNOME 已卸载，发行版 Mutter/Xwayland 已恢复。" \
@@ -339,6 +378,7 @@ require_root() {
         "ANLAND_GNOME_WORK_DIR=$WORK_DIR" \
         "ANLAND_GNOME_PACKAGE_DIR=$PACKAGE_DIR" \
         "ANLAND_GNOME_ARCHIVE_NAME=$ARCHIVE_NAME" \
+        "DROIDSPACES_COMPONENT_STATE_DIR=$COMPONENT_STATE_DIR" \
         "DROIDSPACES_DESKTOP_CONFIG=$DESKTOP_CONFIG" \
         bash "$script_path" "$@"; then
         status=0
@@ -502,8 +542,8 @@ resolve_archive_name() {
         checksum_count="$(awk -F= -v key="$checksum_key" '$1 == key { count += 1 } END { print count + 0 }' "$manifest_file")" || return 1
         case "$checksum_count" in
             0)
-                log "CNB 的旧 Release 清单没有 ${ARCHIVE_NAME} 的 SHA-256；将只执行归档结构和软件包元数据校验。" \
-                    "The legacy CNB Release manifest has no SHA-256 for ${ARCHIVE_NAME}; only archive structure and package metadata will be verified."
+                die "CNB 的旧 Release 清单缺少 ${ARCHIVE_NAME} 的 SHA-256 校验值，拒绝安装。" \
+                    "The legacy CNB Release manifest has no SHA-256 digest for ${ARCHIVE_NAME}; refusing to install."
                 ;;
             1)
                 checksum="$(awk -F= -v key="$checksum_key" '$1 == key { print substr($0, index($0, "=") + 1) }' "$manifest_file")" || return 1
@@ -810,52 +850,145 @@ validate_release_asset_checksum() {
     fi
 }
 
+is_test_package() {
+    case "$1" in
+        mutter-tests|mutter-*-tests|mutter-test) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 validate_package_architecture() {
     local -a files=()
-    local file package_arch package_name mutter_count=0 xwayland_count=0 package_info
+    local file package_arch package_name package_info require_arch
+    local mutter_count=0 xwayland_count=0
 
     case "$PACKAGE_TYPE" in
         deb)
             mapfile -t files < <(find "$PACKAGE_DIR" -maxdepth 1 -type f -name '*.deb' -print | sort)
             for file in "${files[@]}"; do
-                package_arch="$(dpkg-deb -f "$file" Architecture)" || return 1
-                case "$package_arch" in arm64|all) ;; *) return 1 ;; esac
+                package_arch="$(dpkg-deb -f "$file" Architecture)" || {
+                    log "无法读取 deb 架构：$(basename -- "$file")" \
+                        "Could not read the deb architecture: $(basename -- "$file")"
+                    return 1
+                }
+                package_name="$(dpkg-deb -f "$file" Package)" || {
+                    log "无法读取 deb 包名：$(basename -- "$file")" \
+                        "Could not read the deb package name: $(basename -- "$file")"
+                    return 1
+                }
+                require_arch=""
+                case "$package_name" in
+                    mutter) ((mutter_count += 1)); require_arch=arm64 ;;
+                    xwayland) ((xwayland_count += 1)); require_arch=arm64 ;;
+                    libmutter-*|gir1.2-mutter-*|mutter-*-tests) require_arch=arm64 ;;
+                    mutter-common|mutter-common-bin|mutter-dev-bin) ;;
+                    *)
+                        log "归档包含未预期的 deb 包：${package_name}（${package_arch}）" \
+                            "Archive contains an unexpected deb package: ${package_name} (${package_arch})"
+                        return 1
+                        ;;
+                esac
+                if [[ -n "$require_arch" && "$package_arch" != "$require_arch" ]]; then
+                    log "${package_name} 的架构应为 ${require_arch}，实际为 ${package_arch}。" \
+                        "${package_name} should be ${require_arch} but is ${package_arch}."
+                    return 1
+                fi
+                if [[ -z "$require_arch" && "$package_arch" != arm64 && "$package_arch" != all ]]; then
+                    log "${package_name} 的架构应为 arm64 或 all，实际为 ${package_arch}。" \
+                        "${package_name} should be arm64 or all but is ${package_arch}."
+                    return 1
+                fi
             done
-            ((${#files[@]} > 0))
+            if ((mutter_count != 1 || xwayland_count != 1)); then
+                log "deb 归档应恰好包含一个 mutter 和一个 xwayland，实际 mutter=${mutter_count} xwayland=${xwayland_count}。" \
+                    "The deb archive should contain exactly one mutter and one xwayland, found mutter=${mutter_count} xwayland=${xwayland_count}."
+                return 1
+            fi
             ;;
         rpm)
             mapfile -t files < <(find "$PACKAGE_DIR" -maxdepth 1 -type f -name '*.rpm' -print | sort)
             for file in "${files[@]}"; do
-                package_arch="$(rpm -qp --queryformat '%{ARCH}' "$file")" || return 1
-                package_name="$(rpm -qp --queryformat '%{NAME}' "$file")" || return 1
-                case "$package_arch" in aarch64|noarch) ;; *) return 1 ;; esac
+                package_arch="$(rpm -qp --queryformat '%{ARCH}' "$file")" || {
+                    log "无法读取 rpm 架构：$(basename -- "$file")" \
+                        "Could not read the rpm architecture: $(basename -- "$file")"
+                    return 1
+                }
+                package_name="$(rpm -qp --queryformat '%{NAME}' "$file")" || {
+                    log "无法读取 rpm 包名：$(basename -- "$file")" \
+                        "Could not read the rpm package name: $(basename -- "$file")"
+                    return 1
+                }
+                require_arch=""
                 case "$package_name" in
-                    mutter) [[ "$package_arch" == aarch64 ]] || return 1; ((mutter_count += 1)) ;;
+                    mutter) ((mutter_count += 1)); require_arch=aarch64 ;;
+                    xorg-x11-server-Xwayland) ((xwayland_count += 1)); require_arch=aarch64 ;;
                     mutter-common|mutter-common-x11) ;;
-                    mutter-tests) [[ "$package_arch" == aarch64 ]] || return 1 ;;
-                    xorg-x11-server-Xwayland) [[ "$package_arch" == aarch64 ]] || return 1; ((xwayland_count += 1)) ;;
-                    *) return 1 ;;
+                    mutter-tests|mutter-*-tests) ;;
+                    *)
+                        log "归档包含未预期的 rpm 包：${package_name}（${package_arch}）" \
+                            "Archive contains an unexpected rpm package: ${package_name} (${package_arch})"
+                        return 1
+                        ;;
                 esac
+                if [[ -n "$require_arch" && "$package_arch" != "$require_arch" ]]; then
+                    log "${package_name} 的架构应为 ${require_arch}，实际为 ${package_arch}。" \
+                        "${package_name} should be ${require_arch} but is ${package_arch}."
+                    return 1
+                fi
+                if [[ -z "$require_arch" && "$package_arch" != aarch64 && "$package_arch" != noarch ]]; then
+                    log "${package_name} 的架构应为 aarch64 或 noarch，实际为 ${package_arch}。" \
+                        "${package_name} should be aarch64 or noarch but is ${package_arch}."
+                    return 1
+                fi
             done
-            ((mutter_count == 1 && xwayland_count == 1))
+            if ((mutter_count != 1 || xwayland_count != 1)); then
+                log "rpm 归档应恰好包含一个 mutter 和一个 xorg-x11-server-Xwayland，实际 mutter=${mutter_count} xwayland=${xwayland_count}。" \
+                    "The rpm archive should contain exactly one mutter and one xorg-x11-server-Xwayland, found mutter=${mutter_count} xwayland=${xwayland_count}."
+                return 1
+            fi
             ;;
         pkg.tar.*)
             mapfile -t files < <(find "$PACKAGE_DIR" -maxdepth 1 -type f -name '*.pkg.tar.*' -print | sort)
             for file in "${files[@]}"; do
-                package_info="$(LC_ALL=C pacman -Qip "$file")" || return 1
+                package_info="$(LC_ALL=C pacman -Qip "$file")" || {
+                    log "无法读取 Arch 包信息：$(basename -- "$file")" \
+                        "Could not read the Arch package metadata: $(basename -- "$file")"
+                    return 1
+                }
                 package_name="$(awk -F: '/^[[:space:]]*Name[[:space:]]*:/ { sub(/^[[:space:]]*/, "", $2); print $2; exit }' <<< "$package_info")"
                 package_arch="$(awk -F: '/^[[:space:]]*Architecture[[:space:]]*:/ { sub(/^[[:space:]]*/, "", $2); print $2; exit }' <<< "$package_info")"
-                [[ "$package_name" =~ ^[A-Za-z0-9@.+_-]+$ ]] || return 1
-                case "$package_arch" in aarch64|any) ;; *) return 1 ;; esac
+                if [[ ! "$package_name" =~ ^[A-Za-z0-9@.+_-]+$ ]]; then
+                    log "Arch 包名无效：${package_name}" "Invalid Arch package name: ${package_name}"
+                    return 1
+                fi
+                case "$package_arch" in
+                    aarch64|any) ;;
+                    *)
+                        log "${package_name} 的架构应为 aarch64 或 any，实际为 ${package_arch}。" \
+                            "${package_name} should be aarch64 or any but is ${package_arch}."
+                        return 1
+                        ;;
+                esac
                 case "$package_name" in
                     mutter) ((mutter_count += 1)) ;;
                     xorg-xwayland) ((xwayland_count += 1)) ;;
-                    *) return 1 ;;
+                    *)
+                        log "归档包含未预期的 Arch 包：${package_name}" \
+                            "Archive contains an unexpected Arch package: ${package_name}"
+                        return 1
+                        ;;
                 esac
             done
-            (( ${#files[@]} == 2 && mutter_count == 1 && xwayland_count == 1 ))
+            if (( ${#files[@]} != 2 || mutter_count != 1 || xwayland_count != 1 )); then
+                log "Arch 归档应恰好包含一个 mutter 和一个 xorg-xwayland，实际总数=${#files[@]} mutter=${mutter_count} xwayland=${xwayland_count}。" \
+                    "The Arch archive should contain exactly one mutter and one xorg-xwayland, found total=${#files[@]} mutter=${mutter_count} xwayland=${xwayland_count}."
+                return 1
+            fi
             ;;
-        *) return 1 ;;
+        *)
+            log "无法识别软件包类型：${PACKAGE_TYPE}" "Unknown package type: ${PACKAGE_TYPE}"
+            return 1
+            ;;
     esac
 }
 
@@ -988,6 +1121,16 @@ install_deb_packages() {
     command -v apt-get >/dev/null 2>&1 || die "未找到 apt-get。" "apt-get was not found."
     command -v dpkg-deb >/dev/null 2>&1 || die "未找到 dpkg-deb。" "dpkg-deb was not found."
     mapfile -t files < <(find "$PACKAGE_DIR" -maxdepth 1 -type f -name '*.deb' -print | sort)
+    local -a selected=()
+    for file in "${files[@]}"; do
+        package="$(dpkg-deb -f "$file" Package 2>/dev/null || true)"
+        if is_test_package "$package"; then
+            log "跳过测试软件包：${package}" "Skipping test package: ${package}"
+            continue
+        fi
+        selected+=("$file")
+    done
+    files=("${selected[@]}")
     ((${#files[@]} > 0)) || die "没有可安装的 deb 包。" "No installable deb packages were found."
 
     log "正在安装 ${#files[@]} 个 deb 包并自动处理依赖..." \
@@ -1263,18 +1406,24 @@ configure_dnf_excludes() {
 }
 
 install_rpm_packages() {
-    local -a archive_files files packages dnf_install_options=() install_files=() reinstall_files=()
+    local -a files packages dnf_install_options=() install_files=() reinstall_files=()
     local file package_name package_version installed_version
     local dnf_conf="/etc/dnf/dnf.conf"
     local dnf_backup
 
     command -v dnf >/dev/null 2>&1 || die "未找到 dnf。" "dnf was not found."
     command -v rpm >/dev/null 2>&1 || die "未找到 rpm。" "rpm was not found."
-    mapfile -t archive_files < <(find "$PACKAGE_DIR" -maxdepth 1 -type f -name '*.rpm' -print | sort)
-    for file in "${archive_files[@]}"; do
-        package_name="$(rpm -qp --queryformat '%{NAME}' "$file")"
-        [[ "$package_name" == mutter-tests ]] || files+=("$file")
+    mapfile -t files < <(find "$PACKAGE_DIR" -maxdepth 1 -type f -name '*.rpm' -print | sort)
+    local -a selected=()
+    for file in "${files[@]}"; do
+        package_name="$(rpm -qp --queryformat '%{NAME}' "$file" 2>/dev/null || true)"
+        if is_test_package "$package_name"; then
+            log "跳过测试软件包：${package_name}" "Skipping test package: ${package_name}"
+            continue
+        fi
+        selected+=("$file")
     done
+    files=("${selected[@]}")
     ((${#files[@]} > 0)) || die "没有可安装的 rpm 包。" "No installable rpm packages were found."
 
     for file in "${files[@]}"; do
@@ -1323,27 +1472,80 @@ install_rpm_packages() {
     printf '  hold: %s\n' "${packages[@]}"
 }
 
-append_pacman_ignore_packages() {
-    local package
-    for package in "$@"; do
-        [[ "$package" =~ ^[A-Za-z0-9@.+_-]+$ ]] || \
-            die "Arch 软件包名无效。" "The Arch package name is invalid."
-        if awk -v package="$package" '
-            $1 == "IgnorePkg" {
-                for (i = 3; i <= NF; i++) if ($i == package) found = 1
+write_pacman_hold_block() {
+    local -a packages=("$@")
+    local temporary
+    ((${#packages[@]} > 0)) || return 0
+    command -v pacman >/dev/null 2>&1 || return 0
+    [[ -f /etc/pacman.conf ]] || return 0
+    temporary="$(mktemp -t "anland-$COMPONENT_NAME-pacman.XXXXXXXX")" || return 1
+    if ! awk -v begin="# BEGIN anland-$COMPONENT_NAME package holds" \
+        -v end="# END anland-$COMPONENT_NAME package holds" \
+        -v packages="${packages[*]}" '
+        $0 == begin { skip = 1; next }
+        $0 == end { skip = 0; next }
+        skip { next }
+        /^\[options\][[:space:]]*$/ && !wrote {
+            print
+            print begin
+            print "IgnorePkg = " packages
+            print end
+            wrote = 1
+            next
+        }
+        { print }
+        END { if (skip) exit 1; if (!wrote) exit 1 }
+    ' /etc/pacman.conf > "$temporary"; then
+        rm -f -- "$temporary"
+        return 1
+    fi
+    if ! install -m 0644 -- "$temporary" /etc/pacman.conf; then
+        rm -f -- "$temporary"
+        return 1
+    fi
+    rm -f -- "$temporary"
+}
+
+remove_pacman_hold_entries() {
+    local -a packages=("$@")
+    local temporary
+    command -v pacman >/dev/null 2>&1 || return 0
+    [[ -f /etc/pacman.conf ]] || return 0
+    temporary="$(mktemp -t "anland-$COMPONENT_NAME-pacman.XXXXXXXX")" || return 1
+    if ! awk -v begin="# BEGIN anland-$COMPONENT_NAME package holds" \
+        -v end="# END anland-$COMPONENT_NAME package holds" \
+        -v remove_list="${packages[*]}" '
+        BEGIN { remove_count = split(remove_list, remove_names, /[[:space:]]+/) }
+        $0 == begin { inside = 1; next }
+        $0 == end { inside = 0; next }
+        inside { next }
+        /^# BEGIN .* package holds$/ { foreign = 1; print; next }
+        /^# END .* package holds$/ { foreign = 0; print; next }
+        foreign { print; next }
+        /^[[:space:]]*IgnorePkg[[:space:]]*=/ {
+            equals = index($0, "=")
+            count = split(substr($0, equals + 1), items, /[[:space:]]+/)
+            output = ""
+            for (i = 1; i <= count; i++) {
+                remove = 0
+                for (j = 1; j <= remove_count; j++) {
+                    if (items[i] == remove_names[j]) remove = 1
+                }
+                if (items[i] != "" && !remove) output = output (output == "" ? "" : " ") items[i]
             }
-            END { exit found ? 0 : 1 }
-        ' /etc/pacman.conf; then
-            continue
-        fi
-        if grep -qE '^[[:space:]]*IgnorePkg[[:space:]]*=' /etc/pacman.conf; then
-            sed -i -E "0,/^[[:space:]]*IgnorePkg[[:space:]]*=/{s/^([[:space:]]*IgnorePkg[[:space:]]*=.*)$/\\1 ${package}/}" /etc/pacman.conf
-        elif grep -qE '^\[options\][[:space:]]*$' /etc/pacman.conf; then
-            sed -i "/^\[options\][[:space:]]*$/a IgnorePkg = ${package}" /etc/pacman.conf
-        else
-            die "pacman.conf 缺少 [options] 段。" "pacman.conf has no [options] section."
-        fi
-    done
+            if (output != "") print substr($0, 1, equals) " " output
+            next
+        }
+        { print }
+    ' /etc/pacman.conf > "$temporary"; then
+        rm -f -- "$temporary"
+        return 1
+    fi
+    if ! install -m 0644 -- "$temporary" /etc/pacman.conf; then
+        rm -f -- "$temporary"
+        return 1
+    fi
+    rm -f -- "$temporary"
 }
 
 write_pacman_package_state() {
@@ -1407,7 +1609,9 @@ install_arch_packages() {
     if ! pacman -Q "${packages[@]}" >/dev/null; then
         die "无法确认已安装 Arch Mutter/Xwayland 软件包。" "Could not verify that the Arch Mutter/Xwayland packages were installed."
     fi
-    append_pacman_ignore_packages "${packages[@]}"
+    if ! write_pacman_hold_block "${packages[@]}"; then
+        die "无法更新 pacman 锁定配置。" "Unable to update the pacman hold configuration."
+    fi
     write_pacman_package_state "${packages[@]}"
     rm -f -- "$APT_HOLD_STATE"
     rmdir -- "${APT_HOLD_STATE%/*}" 2>/dev/null || true
@@ -1415,7 +1619,7 @@ install_arch_packages() {
 }
 
 main() {
-    local archive_version
+    local archive_version owner
     detect_language
     parse_arguments "$@"
     detect_target
@@ -1426,6 +1630,10 @@ main() {
         return
     fi
     require_runtime_dependencies
+    if owner="$(other_xwayland_owner)"; then
+        die "检测到 Anland ${owner}；GNOME 与它共用 patched Xwayland；请先卸载该组件以避免覆盖。" \
+            "Anland ${owner} is installed; it shares the patched Xwayland with GNOME; uninstall it before installing GNOME to avoid overwriting it."
+    fi
     resolve_release_tag
     if [[ -n "$PREPARED_WORK_DIR" || -n "$PREPARED_PACKAGE_DIR" ]]; then
         use_prepared_packages

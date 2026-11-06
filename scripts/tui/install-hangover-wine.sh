@@ -185,7 +185,7 @@ detect_target() {
     distro_id="${distro_id,,}"
 
     case "$distro_id" in
-        arch|archarm)
+        arch|archarm|archlinux)
             TARGET=arch
             TARGET_LABEL='Arch Linux'
             PACKAGE_KIND=arch
@@ -624,8 +624,8 @@ resolve_archive_name() {
         checksum_count="$(awk -F= -v key="$checksum_key" '$1 == key { count += 1 } END { print count + 0 }' "$manifest")" || return 1
         case "$checksum_count" in
             0)
-                log "CNB 的旧 Release 清单没有 ${ARCHIVE_NAME} 的 SHA-256；将只执行归档结构和软件包元数据校验。" \
-                    "The legacy CNB Release manifest has no SHA-256 for ${ARCHIVE_NAME}; only archive structure and package metadata will be verified."
+                die "CNB Release 清单缺少 ${ARCHIVE_NAME} 的唯一 SHA-256 校验值，拒绝安装。" \
+                    "The CNB Release manifest has no unique SHA-256 digest for ${ARCHIVE_NAME}; refusing to install."
                 ;;
             1)
                 checksum="$(awk -F= -v key="$checksum_key" '$1 == key { print substr($0, index($0, "=") + 1) }' "$manifest")" || return 1
@@ -823,8 +823,8 @@ main() {
         return
     fi
     protect_system_packages
-    bootstrap_dependencies
     select_download_source
+    bootstrap_dependencies
     log "下载源：$(download_source_name "$DOWNLOAD_SOURCE")" \
         "Download source: $(download_source_name "$DOWNLOAD_SOURCE")"
     download_and_extract

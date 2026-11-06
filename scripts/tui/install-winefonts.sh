@@ -35,6 +35,7 @@ INSTALL_TARGET=""
 NEW_TARGET_ACTIVE=false
 INSTALL_SUCCEEDED=false
 UNINSTALL=false
+ASSUME_YES=false
 
 detect_language() {
     local locale_name="${LC_ALL:-${LC_MESSAGES:-${LANG:-C}}}"
@@ -82,13 +83,14 @@ die() {
 
 usage() {
     cat <<EOF
-$(msg '用法' 'Usage'): $0 [--1|--2|--3]
+$(msg '用法' 'Usage'): $0 [--1|--2|--3] [-y|--yes]
 
   $(msg '不带参数：测试三个下载源的延迟后交互选择' 'No option: test all three sources, then choose interactively')
   --1, -1  GitHub
   --2, -2  gh-proxy.com
   --3, -3  CNB
   --uninstall  $(msg '卸载由本脚本管理的 Wine 字体' 'Uninstall Wine fonts managed by this script')
+  -y, --yes  $(msg '跳过替换确认，仅在非交互场景使用' 'Skip the replacement confirmation; use only in noninteractive scenarios')
 
 $(msg '安装目录：/usr/local/share/fonts/winefonts' 'Install directory: /usr/local/share/fonts/winefonts')
 $(msg '安装器绝不会删除或修改 /usr/share/fonts。' 'The installer never deletes or changes /usr/share/fonts.')
@@ -103,6 +105,7 @@ parse_arguments() {
             -2|--2) DOWNLOAD_SOURCE=2; SKIP_SOURCE_PROBE=true ;;
             -3|--3) DOWNLOAD_SOURCE=3; SKIP_SOURCE_PROBE=true ;;
             --uninstall) UNINSTALL=true ;;
+            -y|--yes) ASSUME_YES=true ;;
             -h|--help)
                 usage
                 exit 0
@@ -557,6 +560,7 @@ download_and_extract() {
 confirm_replacement() {
     local target="$1"
     local answer
+    [[ "$ASSUME_YES" == true ]] && return 0
     [[ -e "$target" || -L "$target" ]] || return 0
     [[ -d "$target" && ! -L "$target" ]] || \
         die "管理目录不是普通目录，拒绝替换：$target" \

@@ -56,7 +56,7 @@ RUN chmod +x /usr/local/sbin/install-anland-* /usr/local/sbin/install-mesa /usr/
     pacman -Su --noconfirm && \
     pacman -S --noconfirm --needed \
     # 核心工具组件
-    bash jq dialog coreutils file findutils grep sed gawk curl wget ca-certificates bash-completion dbus systemd pam fastfetch logrotate \
+    bash jq dialog coreutils diffutils file findutils grep sed gawk curl wget ca-certificates bash-completion dbus systemd pam fastfetch logrotate \
     # 用户请求的基础开发/编辑工具
     git nano sudo \
     # 网络与 SSH 工具

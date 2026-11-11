@@ -3,6 +3,11 @@ name: 发布全桌面 Wayland RootFS
 on:
   workflow_dispatch:
     inputs:
+      sync_cnb:
+        description: 构建后同步中文资产到 CNB
+        required: false
+        default: false
+        type: boolean
       sync_cnb_only:
         description: 跳过构建，仅同步已有 GitHub Release 到 CNB
         required: false
@@ -247,7 +252,7 @@ jobs:
 
   sync-cnb:
     name: 同步中文资产到 CNB
-    if: ${{ inputs.sync_cnb_only != true }}
+    if: ${{ inputs.sync_cnb == true && inputs.sync_cnb_only != true }}
     needs: [prepare, build-zh, build-en]
     runs-on: ubuntu-latest
     steps:

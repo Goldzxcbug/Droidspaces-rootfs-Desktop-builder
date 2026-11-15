@@ -13,6 +13,8 @@ droidspaces-tui
 
 See the [script guide](../../scripts/README_english.md#droidspaces-tui) for download sources, integrity checks, cache management, updates, and uninstall behavior.
 
+TUI 1.7 uses `[1] Mesa + VA-API`, `[2] Anland`, `[3] Hangover Wine`, and `[4] Wine fonts`. The Mesa page has a `[5] Video codecs` submenu for driver updates, removal, and live monitoring of codec, hardware status, processing size, and output FPS. Missing driver telemetry is reported as unknown. The monitor uses shell tools without Python; `q`, `Esc`, and `Ctrl+C` return to the menu.
+
 ## USB device management
 
 All distributions include [Droidspaces USB Manager](https://github.com/Yizhou147/Droidspaces-USB-Manager). Enable hardware access for the container in Droidspaces, then launch it from the application menu or run this in KDE:

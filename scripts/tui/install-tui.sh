@@ -292,7 +292,7 @@ parse_manifest() {
         case "$role" in tui|bootstrap|installer) ;; *) die "TUI 清单包含无效类型：$role" ;; esac
         safe_asset_name "$asset" || die "TUI 清单包含不安全的附件名：$asset"
         case "$asset:$role:$target" in
-            "droidspaces-tui.sh:tui:$TUI_TARGET"|"droidspaces-gpu.sh:tui:/usr/local/bin/droidspaces-gpu"|"install-tui.sh:bootstrap:-") ;;
+            "droidspaces-tui.sh:tui:$TUI_TARGET"|"droidspaces-gpu.sh:tui:/usr/local/bin/droidspaces-gpu"|"droidspaces-video.sh:tui:/usr/local/bin/droidspaces-video.sh"|"install-tui.sh:bootstrap:-") ;;
             install-*.sh:installer:/usr/local/sbin/install-*)
                 [[ "$target" == "/usr/local/sbin/${asset%.sh}" ]] || \
                     die "安装脚本与目标路径不匹配：$asset"
@@ -318,7 +318,7 @@ parse_manifest() {
     ((${#ASSET_NAMES[@]} >= 2)) || die 'TUI 清单没有包含必要脚本。'
     [[ "${seen_assets[droidspaces-tui.sh]:-}" == 1 && \
        "${seen_assets[install-tui.sh]:-}" == 1 ]] || die 'TUI 清单缺少核心脚本。'
-    # GPU 脚本属于可选项：旧版清单没有它也能正常工作。清单一旦包含它，
+    # GPU/视频脚本属于可选项：旧版清单没有它们也能正常工作。清单一旦包含它们，
     # 上面的资产名/角色/目标映射与重复检查已经保证记录唯一且合法。
 }
 

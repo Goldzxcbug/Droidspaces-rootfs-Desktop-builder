@@ -12,8 +12,9 @@
 | `configure-desktop.sh` | RootFS 构建环境 | 写入桌面/显示后端配置，调用 profile 环境配置并按需安装统一自启动服务。 |
 | `configure-chrome.sh` | RootFS 构建环境 | 在所有支持 Chrome 的镜像中安装 Chrome；Anland Wayland 镜像额外配置硬件加速启动参数和桌面入口。 |
 | `start-desktop-session.sh` | Linux 容器 | 根据 `/etc/droidspaces-desktop.conf` 启动实际桌面会话。 |
-| `tui/droidspaces-tui.sh` | ARM64 Linux 容器 | 提供统一终端菜单，调度 Mesa、Hangover Wine、Wine 字体和 Anland 安装器。 |
-| `tui/install-mesa.sh` | ARM64 Linux 容器 | 安装最新版 Android 容器专用 Mesa 和 MediaCodec VA-API 驱动，并锁定 Mesa 包。 |
+| `tui/droidspaces-tui.sh` | ARM64 Linux 容器 | 提供 TUI 1.7 终端菜单，调度 Mesa、视频编解码、Anland、Hangover Wine 和 Wine 字体维护。 |
+| `tui/droidspaces-video.sh` | Linux 容器 | 以 Bash、awk、jq 只读监控视频驱动会话，不依赖 Python 或常驻服务。 |
+| `tui/install-mesa.sh` | ARM64 Linux 容器 | 安装最新版 Android 容器专用 Mesa 和 视频编解码 VA-API 驱动，并锁定 Mesa 包。 |
 | `tui/install-hangover-wine.sh` | ARM64 Linux 容器 | 安装当前发行版对应的 Hangover Wine Release 包。 |
 | `tui/install-winefonts.sh` | Linux 容器 | 安装 Wine 字体包并刷新 fontconfig 字体缓存。 |
 | `tui/install-anland-kde.sh` | ARM64 Linux 容器 | 安装 Anland patched KWin/Xwayland Release 包，并锁定相关包。 |
@@ -48,7 +49,17 @@ ds-tui
 ./scripts/tui/droidspaces-tui.sh
 ```
 
-主菜单包含 Mesa 与 MediaCodec VA-API、Hangover Wine、Wine 字体及当前 RootFS 对应的桌面/会话更新项，只显示黄色“检测到更新”、绿色“当前已是最新版本”或红色“未安装”。桌面/会话项严格解析 `/etc/droidspaces-desktop.conf`：KDE/KDE mobile 只显示 Anland KDE，GNOME 只显示 Anland GNOME，Niri/Hyprland/Mango/Denial 显示匹配的 compositor，Anland Next 只显示其 session；`none` 或未知桌面进入组件选择页。旧 RootFS 缺少配置文件时才按已安装的 Anland 组件兜底，无法判断时同样进入选择页。选择组件后进入版本详情，可更新、安装或卸载。版本查询在后台并发运行，动态 Braille 符号表示正在查询，单项 10 秒内未取得有效版本时显示“超时”，且查询不会阻塞菜单输入。版本检测在启动 TUI 时运行，进入菜单、返回或输入无效内容不会重新检测；安装或卸载实际开始执行后，返回主菜单时会自动刷新一次。输入内容可见并支持退格，Loading 使用原地重绘，避免反复清屏闪烁。卸载 Mesa、KWin、Mutter 或 compositor 补丁会恢复发行版官方包，Hangover Wine 和 Wine 字体则移除自身内容。中文环境默认使用 CNB，其他语言环境默认使用 GitHub；下载源也可以统一改为自动测速、GitHub、`gh-proxy.com` 或 CNB。明确选择 CNB 时，TUI 不查询 GitHub API，安装器从同一 CNB Release 的同步清单取得附件名、SHA-256 和大小；旧发布未提供摘要时会明确提示并保留归档结构与包元数据校验。
+TUI 1.7 的主菜单按图形与桌面、Windows 应用和工具分组，依次为 `[1] Mesa + VA-API`、`[2] Anland`、`[3] Hangover Wine` 和 `[4] Wine 字体`。按终端显示宽度对齐中文，适配 60×24、80×24 和 120×30 终端，使用数字/字母快捷键并按 Enter 确认。组件状态用黄色“检测到更新”、绿色“已是最新”或红色“未安装”表示，查询中和失败时另行提示。
+
+桌面/会话项严格解析 `/etc/droidspaces-desktop.conf`：KDE/KDE mobile 只显示 Anland KDE，GNOME 只显示 Anland GNOME，Niri/Hyprland/Mango/Denial 显示匹配的 compositor，Anland Next 只显示其 session；`none` 或未知桌面进入组件选择页。旧 RootFS 缺少配置文件时才按已安装的 Anland 组件兜底，无法判断时同样进入选择页。选择组件后进入版本详情，可更新、安装或卸载。版本查询在后台并发运行，动态 Braille 符号表示正在查询，单项 10 秒内未取得有效版本时显示“超时”，且查询不会阻塞菜单输入。版本检测在启动 TUI 时运行，进入菜单、返回或输入无效内容不会重新检测；安装或卸载实际开始执行后，返回主菜单时会自动刷新一次。输入内容可见并支持退格，Loading 使用原地重绘，避免反复清屏闪烁。卸载 Mesa、KWin、Mutter 或 compositor 补丁会恢复发行版官方包，Hangover Wine 和 Wine 字体则移除自身内容。中文环境默认使用 CNB，其他语言环境默认使用 GitHub；下载源也可以统一改为自动测速、GitHub、`gh-proxy.com` 或 CNB。明确选择 CNB 时，TUI 不查询 GitHub API，安装器从同一 CNB Release 的同步清单取得附件名、SHA-256 和大小；旧发布未提供摘要时会明确提示并保留归档结构与包元数据校验。
+
+Mesa 页的 `[5] 视频编解码` 统一提供视频驱动更新/安装、卸载和实时监控。独立更新和卸载使用 `--media-only`，保留 Mesa 软件包；`[4] 选择 Mesa 版本` 使用 `--mesa-only`，保留视频驱动。视频版本和已安装文件的 SHA-256 独立记录在 `/var/lib/droidspaces-tui/components/video.version`，外部替换驱动后会提示版本未知。更新或卸载驱动后需重启相关应用。
+
+实时监控由 `/usr/local/bin/droidspaces-video.sh` 提供，使用 Bash、awk、jq 和 GNU coreutils/findutils；七个发行版的基础工具集合已经包含这些依赖。监控继承当前用户身份，不自动提权、不启动常驻服务，只读扫描可访问的 `dmd-video-v1` 驱动会话。界面显示方向、视频格式、处理尺寸、输出 FPS 和硬件状态，按应用及 UID 分组；绿色表示驱动已报告硬件工作完成，黄色表示待确认或未知，红色表示错误。可读的 mpv、VLC、OBS 进程即使没有驱动会话也会列出，但不会据此推测软件编解码。
+
+输出 FPS 根据相邻采集的输出帧增量与内核采样时钟计算；首次采集显示 `--`，暂停后显示 0，不等于屏幕播放 FPS。处理尺寸可能包含硬件对齐，例如 1920×1088；监控不会将它改报为源显示尺寸。旧驱动、其他接口或进程权限可能使会话不可见，此时状态为未知。按 `q`、`Esc` 或 `Ctrl+C` 返回视频子菜单；`--no-color` 同时传入监控。独立运行支持 `bash /usr/local/bin/droidspaces-video.sh --once`、`--json` 和 `--interval 秒数`。
+
+构建时直接复制本仓库中的 TUI 和监控脚本；package 仓库的新提交不会自动替换这份副本。已部署 RootFS 可通过 `U` 更新，但更新源必须先发布新的 `Gold-bug-tui` Release。
 
 主菜单的 `C` 进入缓存管理。可以只清理 Hangover Release 清单缓存，解决滚动 Release 更新后旧清单无法续传的问题；也可以清空 `/var/cache/hangover-wine` 下的全部下载缓存。两项操作都需要确认，清空全部缓存会导致下次安装重新下载软件包。
 
@@ -63,7 +74,7 @@ droidspaces-tui --source github
 
 ## Mesa 安装器
 
-`install-mesa.sh` 在 GitHub/代理模式从分发 Release 选择当前发行版对应的 ARM64 Mesa 资产；CNB 模式则只读取同一 CNB Release 的 `mesa-distribution-manifest`。随后安装其中同步的 `msm_drm_drv_video.so`。支持 Debian 13、Ubuntu 24.04/25.10/26.04、Fedora 43/44 和 Arch Linux。媒体解码驱动按发行版安装到 libva 的默认驱动目录：Debian/Ubuntu 为 `/usr/lib/aarch64-linux-gnu/dri`，Fedora 为 `/usr/lib64/dri`，Arch Linux 为 `/usr/lib/dri`。
+`install-mesa.sh` 在 GitHub/代理模式从分发 Release 选择当前发行版对应的 ARM64 Mesa 资产；CNB 模式则只读取同一 CNB Release 的 `mesa-distribution-manifest`。随后安装其中同步的 `msm_drm_drv_video.so`。支持 Debian 13、Ubuntu 24.04/25.10/26.04、Fedora 43/44 和 Arch Linux。视频编解码驱动按发行版安装到 libva 的默认驱动目录：Debian/Ubuntu 为 `/usr/lib/aarch64-linux-gnu/dri`，Fedora 为 `/usr/lib64/dri`，Arch Linux 为 `/usr/lib/dri`。
 
 安装器会严格检查 Release tag、资产名和下载内容。GitHub/代理模式保留 GitHub Release API 的 SHA-256 交叉校验；CNB 模式只使用 CNB 分发清单中的 SHA-256 与大小，并继续校验随 Release 同步的媒体驱动 `SHA256SUMS`。下载支持断点续传，临时文件在退出时自动清理。
 
@@ -78,10 +89,10 @@ sudo ./scripts/tui/install-mesa.sh
 ```bash
 sudo ./scripts/tui/install-mesa.sh --1  # GitHub
 sudo ./scripts/tui/install-mesa.sh --2  # gh-proxy.com
-sudo ./scripts/tui/install-mesa.sh --3  # ghproxy.net
+sudo ./scripts/tui/install-mesa.sh --3  # CNB
 ```
 
-三个来源选项互斥，并同时作用于 Mesa 与媒体解码驱动下载。`-1`、`-2`、`-3` 是对应的短参数，`--help` 可查看内置帮助。第三方源仍需访问 `api.github.com` 取得可信元数据，并需要 `jq` 和 `sha256sum`；下载由 `curl` 或 `wget` 完成。
+三个来源选项互斥，并同时作用于 Mesa 与视频编解码驱动下载。`-1`、`-2`、`-3` 是对应的短参数，`--help` 可查看内置帮助。GitHub/代理模式通过 GitHub Release API 交叉校验；CNB 模式只读取 CNB 分发清单。下载与摘要校验由安装器完成。
 
 安装完成后，脚本按发行版写入持久锁定：
 

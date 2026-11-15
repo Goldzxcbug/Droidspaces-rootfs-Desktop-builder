@@ -5,7 +5,7 @@ set -euo pipefail
 # 媒体解码源仓库：https://github.com/Re-s/droidspaces-media-decode
 # 分发地址：https://github.com/Goldzxcbug/droidspaces-package/releases/tag/mesa-for-android-container
 # 安装面向 Android 容器的 ARM64 Mesa 构建。
-# 同时安装 droidspaces-media-decode 发布的 MediaCodec VA-API 驱动。
+# 同时安装 droidspaces-media-decode 发布的视频编解码 VA-API 驱动。
 # 根据 /etc/os-release 选择 Mesa 归档格式和包管理器。
 readonly RELEASE_REPOSITORY="Goldzxcbug/droidspaces-package"
 readonly CNB_RELEASE_REPOSITORY="goldzxcbug/droidspaces-package"
@@ -108,6 +108,38 @@ record_component_version() {
     rm -f -- "$temporary_file" || true
     log "无法记录已安装的 Mesa 版本。" "Could not record the installed Mesa version."
     return 0
+}
+
+record_video_version() {
+    local version="$MEDIA_RELEASE_TAG" digest state_file="$COMPONENT_STATE_DIR/video.version" temporary_file
+    digest="$(sha256sum "$MEDIA_DRIVER_INSTALL_PATH" 2>/dev/null)" || {
+        log '无法记录视频驱动版本。' 'Could not record the video driver version.'
+        return 0
+    }
+    digest="${digest%% *}"
+    [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || return 0
+    # Older distribution manifests lack media_tag. Identify their actual
+    # driver bytes instead of reporting the rolling Mesa release as a version.
+    if [[ "$version" == "$DISTRIBUTION_TAG" || ! "$version" =~ ^[0-9A-Za-z][0-9A-Za-z.+:~_-]{0,63}$ ]]; then
+        version="sha256-${digest:0:12}"
+    fi
+    if ! mkdir -p -- "$COMPONENT_STATE_DIR" || \
+        ! temporary_file="$(mktemp "$state_file.tmp.XXXXXXXX")"; then
+        log '无法记录视频驱动版本。' 'Could not record the video driver version.'
+        return 0
+    fi
+    if printf '%s\nsha256=%s\n' "$version" "$digest" > "$temporary_file" && \
+        chmod 0644 "$temporary_file" && mv -f -- "$temporary_file" "$state_file"; then
+        return 0
+    fi
+    rm -f -- "$temporary_file" || true
+    log '无法记录视频驱动版本。' 'Could not record the video driver version.'
+    return 0
+}
+
+video_restart_notice() {
+    log '请重新启动正在使用视频驱动的应用，使变更生效。' \
+        'Restart applications using the video driver for this change to take effect.'
 }
 
 mesa_archive_version() {
@@ -323,8 +355,10 @@ uninstall_mesa() {
 
 uninstall_media_driver() {
     rm -f -- "$MEDIA_DRIVER_INSTALL_PATH"
+    rm -f -- "$COMPONENT_STATE_DIR/video.version"
     command -v ldconfig >/dev/null 2>&1 && ldconfig || true
-    log '媒体解码驱动已移除。' 'Media decode driver removed.'
+    log '视频编解码驱动已移除。' 'Video codec driver removed.'
+    video_restart_notice
 }
 
 preserve_media() {
@@ -575,6 +609,7 @@ download_manifest_for_source() {
 parse_distribution_manifest() {
     local manifest_file="$1"
     local manifest_size rows checksum size asset archive_name="" canonical_base
+    local metadata_line media_tag="" media_tag_seen=false
     local archive_count=0 driver_count=0 checksums_count=0
     local archive_checksum="" archive_size=""
     local driver_checksum="" driver_size=""
@@ -587,6 +622,20 @@ parse_distribution_manifest() {
         "Mesa 分发清单大小无效。" "The Mesa distribution manifest size is invalid."
     rows="$(manifest_asset_rows "$manifest_file")" || die \
         "Mesa 分发清单格式无效。" "The Mesa distribution manifest format is invalid."
+
+    while IFS= read -r metadata_line; do
+        metadata_line="${metadata_line%$'\r'}"
+        case "$metadata_line" in
+            $'sha256\tsize\tasset') break ;;
+            media_tag=*)
+                [[ "$media_tag_seen" == false ]] || die '分发清单重复媒体版本。' 'Duplicate media version in the distribution manifest.'
+                media_tag_seen=true
+                media_tag="${metadata_line#media_tag=}"
+                ;;
+        esac
+    done < "$manifest_file"
+    [[ -z "$media_tag" || "$media_tag" =~ ^[0-9A-Za-z][0-9A-Za-z.+:~_-]{0,63}$ ]] || \
+        die '分发清单中的媒体版本无效。' 'Invalid media version in the distribution manifest.'
 
     while IFS=$'\t' read -r checksum size asset; do
         [[ -n "$checksum" && -n "$size" && -n "$asset" ]] || continue
@@ -628,7 +677,7 @@ parse_distribution_manifest() {
     RELEASE_TAG="$DISTRIBUTION_TAG"
     EXPECTED_ARCHIVE_SHA256="$archive_checksum"
     EXPECTED_ARCHIVE_SIZE="$archive_size"
-    MEDIA_RELEASE_TAG="$DISTRIBUTION_TAG"
+    MEDIA_RELEASE_TAG="${media_tag:-$DISTRIBUTION_TAG}"
     MEDIA_DRIVER_RELEASE_DIGEST="sha256:$driver_checksum"
     MEDIA_DRIVER_RELEASE_SIZE="$driver_size"
     MEDIA_CHECKSUMS_RELEASE_DIGEST="sha256:$checksums_checksum"
@@ -1487,8 +1536,10 @@ install_media_decode_driver() {
         die "无法安装媒体解码驱动。" "Unable to install the media decode driver."
     fi
     MEDIA_DRIVER_TEMP_FILE=""
-    log "已安装媒体解码驱动: ${MEDIA_DRIVER_INSTALL_PATH} (${MEDIA_RELEASE_TAG})" \
-        "Installed media decode driver: ${MEDIA_DRIVER_INSTALL_PATH} (${MEDIA_RELEASE_TAG})"
+    record_video_version
+    log "已安装视频编解码驱动: ${MEDIA_DRIVER_INSTALL_PATH} (${MEDIA_RELEASE_TAG})" \
+        "Installed video codec driver: ${MEDIA_DRIVER_INSTALL_PATH} (${MEDIA_RELEASE_TAG})"
+    video_restart_notice
 }
 
 install_mesa() {

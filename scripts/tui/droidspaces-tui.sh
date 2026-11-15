@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-readonly TUI_VERSION="1.6"
+readonly TUI_VERSION="1.7"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_PATH="$SCRIPT_DIR/$(basename -- "${BASH_SOURCE[0]}")"
 readonly DESKTOP_CONFIG="${DROIDSPACES_DESKTOP_CONFIG:-/etc/droidspaces-desktop.conf}"
 readonly GPU_HELPER_LOCAL="$SCRIPT_DIR/droidspaces-gpu.sh"
 readonly GPU_HELPER_INSTALLED="/usr/local/bin/droidspaces-gpu"
+readonly VIDEO_HELPER_LOCAL="$SCRIPT_DIR/droidspaces-video.sh"
+readonly VIDEO_HELPER_INSTALLED="/usr/local/bin/droidspaces-video.sh"
 readonly HANGOVER_CACHE_DIR="/var/cache/hangover-wine"
 readonly HANGOVER_MANIFEST_NAME="hangover-wine-manifest"
 readonly COMPONENT_STATE_DIR="${DROIDSPACES_COMPONENT_STATE_DIR:-/var/lib/droidspaces-tui/components}"
@@ -51,6 +53,11 @@ MENU_CHOICE=""
 MENU_ESCAPE_SEQUENCE=""
 MENU_TTY_ECHO_DISABLED=false
 DYNAMIC_MENU_DRAWN=false
+UI_WIDTH=76
+UI_ROWS=24
+UI_CHAR_WIDTH=1
+UI_TEXT_WIDTH=0
+UI_ERASE=""
 
 readonly -a COMPONENT_NAMES=(mesa hangover fonts kde gnome niri hyprland mango denial anland-next)
 readonly -a SPINNER_FRAMES=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
@@ -145,7 +152,7 @@ parse_arguments() {
                 shift
                 ;;
             --no-color)
-                NO_COLOR=1
+                export NO_COLOR=1
                 shift
                 ;;
             -h|--help)
@@ -173,7 +180,7 @@ init_colors() {
     if [[ -t 1 && "${TERM:-dumb}" != "dumb" && -z "${NO_COLOR:-}" ]]; then
         COLOR_RESET=$'\033[0m'
         COLOR_BOLD=$'\033[1m'
-        COLOR_BLUE=$'\033[34m'
+        COLOR_BLUE=$'\033[94m'
         COLOR_CYAN=$'\033[36m'
         COLOR_GREEN=$'\033[32m'
         COLOR_YELLOW=$'\033[33m'
@@ -318,21 +325,17 @@ draw_dynamic_menu_frame() {
     fi
 }
 
+
 draw_dynamic_menu_prompt() {
-    if dynamic_ui_supported; then
-        printf '\r\033[2K'
-    fi
-    printf '%s: %s' "$(msg '请选择' 'Select')" "$MENU_INPUT_BUFFER"
+    if dynamic_ui_supported; then printf '\r\033[2K'; fi
+    printf '  %b›%b %s: %s' "$COLOR_CYAN" "$COLOR_RESET" \
+        "$(msg '请选择' 'Select')" "$(ui_fit "$MENU_INPUT_BUFFER" "$((UI_WIDTH - 18))")"
     if component_versions_pending && dynamic_ui_supported; then
         printf '  %b%s%b' "$COLOR_CYAN" \
-            "${SPINNER_FRAMES[$((SPINNER_INDEX % ${#SPINNER_FRAMES[@]}))]}" \
-            "$COLOR_RESET"
+            "${SPINNER_FRAMES[$((SPINNER_INDEX % ${#SPINNER_FRAMES[@]}))]}" "$COLOR_RESET"
     fi
-    if dynamic_ui_supported; then
-        printf '\033[J'
-    fi
+    if dynamic_ui_supported; then printf '\033[J'; fi
 }
-
 read_dynamic_menu_choice() {
     local key="" line="" read_status=0
     MENU_CHOICE=""
@@ -475,15 +478,204 @@ cleanup_mirror_files() {
     MIRROR_WORK_DIR=""
 }
 
+# Display widths are terminal cells, rather than UTF-8 byte counts. Keep the
+# shell UI independent of the optional monitor and JSON parser.
+ui_char_width() {
+    local char="$1" code
+    printf -v code '%d' "'$char"
+    UI_CHAR_WIDTH=1
+    if (( (code >= 0x300 && code <= 0x36f) ||
+          (code >= 0xfe00 && code <= 0xfe0f) || code == 0x200d )); then
+        UI_CHAR_WIDTH=0
+    elif (( (code >= 0x1100 && code <= 0x115f) ||
+            (code >= 0x2e80 && code <= 0xa4cf) ||
+            (code >= 0xac00 && code <= 0xd7a3) ||
+            (code >= 0xf900 && code <= 0xfaff) ||
+            (code >= 0xfe10 && code <= 0xfe6f) ||
+            (code >= 0xff01 && code <= 0xff60) ||
+            (code >= 0xffe0 && code <= 0xffe6) ||
+            (code >= 0x1f300 && code <= 0x1faff) ||
+            (code >= 0x20000 && code <= 0x3ffff) )); then
+        UI_CHAR_WIDTH=2
+    fi
+}
+
+ui_measure() {
+    local LC_ALL=C.UTF-8 text="$1" char i
+    UI_TEXT_WIDTH=0
+    for ((i=0; i<${#text}; i++)); do
+        char="${text:i:1}"
+        ui_char_width "$char"
+        UI_TEXT_WIDTH=$((UI_TEXT_WIDTH + UI_CHAR_WIDTH))
+    done
+}
+
+ui_plain() {
+    local text="$1" sgr=$'\033''\[[0-9;]*m'
+    while [[ "$text" =~ $sgr ]]; do
+        text="${text/"${BASH_REMATCH[0]}"/}"
+    done
+    text="${text//$'\n'/ }"
+    text="${text//$'\r'/ }"
+    text="${text//$'\t'/ }"
+    while [[ "$text" =~ [[:cntrl:]] ]]; do
+        text="${text/"${BASH_REMATCH[0]}"/}"
+    done
+    printf '%s' "$text"
+}
+
+ui_fit() {
+    local LC_ALL=C.UTF-8 text="$1" width="$2" out="" used=0 char i
+    ((width > 0)) || return 0
+    ui_measure "$text"
+    if ((UI_TEXT_WIDTH <= width)); then printf '%s' "$text"; return; fi
+    for ((i=0; i<${#text}; i++)); do
+        char="${text:i:1}"
+        ui_char_width "$char"
+        ((used + UI_CHAR_WIDTH <= width - 1)) || break
+        out+="$char"
+        used=$((used + UI_CHAR_WIDTH))
+    done
+    printf '%s…' "$out"
+}
+
+ui_layout() {
+    local rows="" columns="${COLUMNS:-80}"
+    if [[ -t 1 ]] && command -v stty >/dev/null 2>&1; then
+        read -r rows columns < <(stty size 2>/dev/null) || true
+    fi
+    [[ "$columns" =~ ^[0-9]+$ ]] && ((columns >= 12)) || columns=80
+    [[ "$rows" =~ ^[0-9]+$ ]] && ((rows > 0)) || rows=24
+    UI_WIDTH=$((columns > 112 ? 108 : columns - 4))
+    UI_ROWS="$rows"
+    UI_ERASE=""
+    if [[ -t 1 && "${TERM:-dumb}" != dumb ]]; then UI_ERASE=$'\033[K'; fi
+}
+
+ui_line() {
+    local text color="${2:-}"
+    text="$(ui_plain "$1")"
+    printf '  %b%s%b%s\n' "$color" "$(ui_fit "$text" "$UI_WIDTH")" "$COLOR_RESET" "$UI_ERASE"
+}
+
+ui_split() {
+    local left right left_color="${3:-}" right_color="${4:-$COLOR_DIM}"
+    local right_width available fitted gap
+    left="$(ui_plain "$1")"; right="$(ui_plain "$2")"
+    ui_measure "$right"; right_width="$UI_TEXT_WIDTH"
+    available=$((UI_WIDTH - right_width - 2))
+    if ((available < 12)); then
+        ui_line "$left" "$left_color"
+        [[ -z "$right" ]] || ui_line "    $right" "$right_color"
+        return
+    fi
+    fitted="$(ui_fit "$left" "$available")"
+    ui_measure "$fitted"; gap=$((UI_WIDTH - UI_TEXT_WIDTH - right_width))
+    printf '  %b%s%b%*s%b%s%b%s\n' "$left_color" "$fitted" "$COLOR_RESET" \
+        "$gap" '' "$right_color" "$right" "$COLOR_RESET" "$UI_ERASE"
+}
+
+ui_rule() {
+    local line
+    printf -v line '%*s' "$UI_WIDTH" ''
+    printf '  %b%s%b%s\n' "$COLOR_DIM" "${line// /─}" "$COLOR_RESET" "$UI_ERASE"
+}
+
+ui_blank() {
+    printf '%s\n' "$UI_ERASE"
+}
+
+ui_group() {
+    ui_line "$1" "$COLOR_BOLD"
+}
+
+ui_wrap() {
+    local LC_ALL=C.UTF-8 text color="${2:-}" chunk used char i
+    text="$(ui_plain "$1")"
+    while [[ -n "$text" ]]; do
+        chunk=""; used=0
+        for ((i=0; i<${#text}; i++)); do
+            char="${text:i:1}"
+            ui_char_width "$char"
+            ((used + UI_CHAR_WIDTH <= UI_WIDTH)) || break
+            chunk+="$char"; used=$((used + UI_CHAR_WIDTH))
+        done
+        ui_line "$chunk" "$color"
+        text="${text:i}"
+    done
+}
+
+ui_display_value() {
+    local text
+    text="$(ui_plain "$1")"
+    case "$text" in
+        ⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏) text="$(msg '检测中' 'Checking') $text" ;;
+    esac
+    printf '%s' "$text"
+}
+
+ui_key_value() {
+    local label="$1" value color="${3:-}"
+    value="$(ui_display_value "$2")"
+    ui_line "$label  $value" "$color"
+}
+
+ui_action() {
+    local key="$1" label="$2" hint="${3:-}" color="${4:-$COLOR_CYAN}"
+    if ((UI_WIDTH >= 70)) && [[ -n "$hint" ]]; then
+        ui_split "[$key] $label" "$hint" "$color" "$COLOR_DIM"
+    else
+        ui_line "[$key] $label" "$color"
+    fi
+}
+
+ui_action_pair() {
+    local left="[$1] $2" right="[$3] $4" half=$(((UI_WIDTH - 4) / 2)) fitted gap
+    if ((half < 22)); then
+        ui_action "$1" "$2"; ui_action "$3" "$4"
+        return
+    fi
+    fitted="$(ui_fit "$left" "$half")"
+    ui_measure "$fitted"; gap=$((half + 4 - UI_TEXT_WIDTH))
+    printf '  %b%s%b%*s%b%s%b%s\n' "$COLOR_CYAN" "$fitted" "$COLOR_RESET" \
+        "$gap" '' "$COLOR_CYAN" "$(ui_fit "$right" "$half")" "$COLOR_RESET" "$UI_ERASE"
+}
+
+ui_status_row() {
+    local key="$1" label="$2" raw="$3" status color="$COLOR_DIM" left
+    status="$(ui_display_value "$raw")"; left="[$key] $label"
+    if [[ "$status" == "$(msg '当前已是最新版本' 'up to date')" ]]; then
+        status="$(msg '已是最新' 'Up to date')"
+    fi
+    if [[ -n "$COLOR_GREEN" && "$raw" == *"$COLOR_GREEN"* ]]; then color="$COLOR_GREEN"
+    elif [[ -n "$COLOR_RED" && "$raw" == *"$COLOR_RED"* ]]; then color="$COLOR_RED"
+    elif [[ -n "$COLOR_YELLOW" && "$raw" == *"$COLOR_YELLOW"* ]]; then color="$COLOR_YELLOW"
+    elif [[ -n "$COLOR_CYAN" && "$raw" == *"$COLOR_CYAN"* ]]; then color="$COLOR_CYAN"; fi
+    ui_measure "$left  $status"
+    if ((UI_TEXT_WIDTH > UI_WIDTH)); then
+        ui_line "$left" "$COLOR_CYAN"
+        ui_line "    $status" "$color"
+    else
+        ui_split "$left" "$status" "$COLOR_CYAN" "$color"
+    fi
+}
+
+ui_footer() {
+    local key="$1" label="$2" hint
+    hint="$(msg '快捷键 + Enter 确认' 'Shortcut + Enter')"
+    [[ "$key" != 0 ]] || hint="$(msg 'Q 返回 · Enter 确认' 'Q back · Enter to confirm')"
+    ui_rule
+    ui_split "[$key] $label" "$hint" "$COLOR_CYAN" "$COLOR_DIM"
+}
+
+
 draw_header() {
-    printf '%b%s%b\n' "$COLOR_BLUE" "====================================================" "$COLOR_RESET"
-    printf '  %b%s%b  %b%s%b\n' \
-        "$COLOR_BOLD$COLOR_CYAN" "Droidspaces Toolkit" "$COLOR_RESET" \
-        "$COLOR_DIM" "v$TUI_VERSION" "$COLOR_RESET"
-    printf '%b%s%b\n' "$COLOR_BLUE" "----------------------------------------------------" "$COLOR_RESET"
-    printf '  %s: %s (%s)\n' "$(msg '系统' 'System')" "$SYSTEM_LABEL" "$ARCHITECTURE"
-    printf '  %s: %s\n' "$(msg '下载源' 'Source')" "$(source_label)"
-    printf '%b%s%b\n' "$COLOR_BLUE" "====================================================" "$COLOR_RESET"
+    local page="${1:-$(msg '工具箱' 'Toolkit')}" system="$SYSTEM_LABEL · $ARCHITECTURE"
+    ui_layout
+    if ((UI_WIDTH < 64)); then system="$SYSTEM_ID $SYSTEM_VERSION · $ARCHITECTURE"; fi
+    ui_split "DROIDSPACES / $page" "v$TUI_VERSION" "$COLOR_BOLD$COLOR_CYAN" "$COLOR_DIM"
+    ui_split "$system" "$(source_label)" "$COLOR_DIM" "$COLOR_DIM"
+    ui_rule
 }
 
 installer_names() {
@@ -1175,12 +1367,10 @@ desktop_selection_status_display() {
     printf '%b%s%b' "$COLOR_GREEN" "$(msg '当前已是最新版本' 'up to date')" "$COLOR_RESET"
 }
 
-print_component_status() {
-    local number="$1" label="$2" component="$3"
-    printf '  %b[%s]%b %s - %s\n' \
-        "$COLOR_CYAN" "$number" "$COLOR_RESET" "$label" "$(component_status_display "$component")"
-}
 
+print_component_status() {
+    ui_status_row "$1" "$2" "$(component_status_display "$3")"
+}
 pause_menu() {
     local unused
     printf '\n%s' "$(msg '按 Enter 返回菜单...' 'Press Enter to return to the menu...')"
@@ -1398,6 +1588,220 @@ gpu_status_display() {
     printf '%s' "$value"
 }
 
+video_driver_path() {
+    case "$SYSTEM_ID" in
+        debian|ubuntu) printf '/usr/lib/aarch64-linux-gnu/dri/msm_drm_drv_video.so' ;;
+        fedora) printf '/usr/lib64/dri/msm_drm_drv_video.so' ;;
+        arch|archarm|archlinux) printf '/usr/lib/dri/msm_drm_drv_video.so' ;;
+        *) return 1 ;;
+    esac
+}
+
+video_unknown_version() {
+    local driver="$1" description="$2" digest
+    printf '%s' "$description"
+    if digest="$(sha256sum "$driver" 2>/dev/null)"; then
+        digest="${digest%% *}"
+        if [[ "$digest" =~ ^[0-9a-f]{64}$ ]]; then
+            printf ' [sha256:%s]' "${digest:0:12}"
+        fi
+    fi
+}
+
+video_current_version() {
+    local driver version recorded_sha actual_sha
+    if ! driver="$(video_driver_path)"; then
+        printf '%s' "$(msg '当前系统不支持' 'unsupported system')"
+    elif [[ ! -f "$driver" ]]; then
+        printf '%s' "$(msg '未安装' 'not installed')"
+    elif version="$(stored_component_version video)"; then
+        # New records bind the version to the installed bytes. A driver
+        # replaced outside this installer must not retain a stale version.
+        recorded_sha="$(sed -n '2s/^sha256=//p' "$COMPONENT_STATE_DIR/video.version")"
+        if [[ -n "$recorded_sha" ]]; then
+            actual_sha="$(sha256sum "$driver" 2>/dev/null)" || actual_sha=""
+            actual_sha="${actual_sha%% *}"
+            if [[ ! "$recorded_sha" =~ ^[0-9a-f]{64}$ || "$actual_sha" != "$recorded_sha" ]]; then
+                video_unknown_version "$driver" "$(msg '已安装（文件已变更，版本未知）' 'installed (file changed; version unknown)')"
+                return
+            fi
+        fi
+        printf '%s' "$version"
+    else
+        video_unknown_version "$driver" "$(msg '已安装（版本未知）' 'installed (version unknown)')"
+    fi
+}
+
+video_monitor_support() {
+    local driver status
+    if ! driver="$(video_driver_path)"; then
+        printf '%s' "$(msg '当前系统不支持' 'unsupported system')"
+    elif [[ ! -f "$driver" ]]; then
+        printf '%s' "$(msg '未安装驱动' 'driver not installed')"
+    elif LC_ALL=C grep -aFq -- 'DMD_VIDEO_STATS_PROTOCOL=1' "$driver" 2>/dev/null; then
+        printf '%s' "$(msg '支持监控协议 v1' 'monitoring protocol v1 supported')"
+    else
+        status=$?
+        if ((status == 1)); then
+            printf '%s' "$(msg '不支持（旧版或其他驱动）' 'unsupported (older or other driver)')"
+        else
+            printf '%s' "$(msg '未知（无法读取驱动）' 'unknown (cannot read driver)')"
+        fi
+    fi
+}
+
+run_video_monitor() {
+    local helper="$VIDEO_HELPER_INSTALLED" status saved_int_trap
+    local -a arguments=()
+    restore_dynamic_menu_echo
+    [[ ! -f "$VIDEO_HELPER_LOCAL" ]] || helper="$VIDEO_HELPER_LOCAL"
+    if [[ ! -f "$helper" || ! -r "$helper" ]]; then
+        printf '%s\n' "$(msg '视频监控脚本未安装，请更新 TUI。' 'The video monitor is missing; update the TUI.')" >&2
+        pause_menu
+        return 1
+    fi
+    [[ -t 0 && -t 1 ]] || arguments+=(--once)
+    saved_int_trap="$(trap -p INT)"
+    # Catch SIGINT in the waiting parent without ignoring it in the child.
+    # The monitor handles Ctrl+C and restores its own terminal before returning.
+    trap ':' INT
+    if bash "$helper" "${arguments[@]}"; then
+        status=0
+    else
+        status=$?
+    fi
+    if [[ -n "$saved_int_trap" ]]; then
+        eval "$saved_int_trap"
+    else
+        trap - INT
+    fi
+    if ((status != 0)); then
+        printf '%s\n' "$(msg "视频监控退出，状态码：$status。" "The video monitor exited with status $status.")" >&2
+        pause_menu
+    fi
+    return "$status"
+}
+
+run_video_action() {
+    case "$1" in
+        update) run_component mesa "$(msg '更新/安装视频编解码驱动' 'Update/install video codec driver')" --media-only ;;
+        uninstall) run_component mesa "$(msg '卸载视频编解码驱动' 'Uninstall video codec driver')" --media-only --uninstall ;;
+        monitor) run_video_monitor ;;
+        *) return 2 ;;
+    esac
+}
+
+draw_video_menu_content() {
+    local monitoring monitor_color="$COLOR_DIM"
+    monitoring="$(video_monitor_support)"
+    if [[ "$monitoring" == "$(msg '支持监控协议 v1' 'monitoring protocol v1 supported')" ]]; then
+        monitoring="$(msg '可用 · 协议 v1' 'Available · protocol v1')"
+        monitor_color="$COLOR_GREEN"
+    fi
+    draw_header "$(msg 'Mesa / 视频编解码' 'Mesa / Video codecs')"
+    ui_blank
+    ui_group "$(msg '驱动状态' 'Driver status')"
+    ui_line "$(msg '视频驱动版本' 'Video driver version')" "$COLOR_DIM"
+    ui_wrap "$(video_current_version)" "$COLOR_BOLD"
+    ui_key_value "$(msg '监控' 'Monitoring')" "$monitoring" "$monitor_color"
+    ui_blank
+    ui_group "$(msg '维护' 'Maintenance')"
+    ui_action 1 "$(msg '更新/安装' 'Update/install')" "$(msg '获取最新视频驱动' 'Get the latest video driver')"
+    ui_action 2 "$(msg '卸载' 'Uninstall')" "$(msg '移除视频编解码驱动' 'Remove the video driver')" "$COLOR_RED"
+    ui_blank
+    ui_group "$(msg '运行状态' 'Activity')"
+    ui_action 3 "$(msg '实时监控' 'Live monitoring')" "$(msg '格式 · 硬件状态 · 分辨率 · FPS' 'Codec · Hardware · Size · FPS')"
+    ui_blank
+    ui_wrap "$(msg '更换驱动后需重启应用；磁盘支持不代表应用已加载。' 'Restart apps after changing the driver; disk support does not confirm the loaded driver.')" "$COLOR_DIM"
+    ui_footer 0 "$(msg '返回' 'Back')"
+}
+
+draw_component_menu_content() {
+    local component="$1" label="$2"
+    draw_header "$label"
+    ui_blank
+    ui_key_value "$(msg '状态' 'Status')" "$(component_status_display "$component")"
+    ui_key_value "$(msg '当前版本' 'Installed')" "${COMPONENT_CURRENT_VERSIONS[$component]}"
+    ui_key_value "$(msg '上游版本' 'Available')" "$(component_upstream_display "$component")"
+    if [[ "$component" == mesa ]]; then
+        ui_blank
+        ui_group "$(msg '渲染路径' 'Rendering paths')"
+        ui_key_value "$(msg 'OpenGL 当前' 'OpenGL now')" "$(gpu_status_display current opengl)" "$COLOR_GREEN"
+        ui_key_value "$(msg 'OpenGL 下次启动' 'OpenGL next start')" "$(gpu_status_display saved opengl)" "$COLOR_LIGHT_YELLOW"
+        ui_key_value "$(msg 'Vulkan 当前' 'Vulkan now')" "$(gpu_status_display current vulkan)" "$COLOR_GREEN"
+        ui_key_value "$(msg 'Vulkan 下次启动' 'Vulkan next start')" "$(gpu_status_display saved vulkan)" "$COLOR_LIGHT_YELLOW"
+    fi
+    ui_blank
+    ui_group "$(msg '管理' 'Manage')"
+    if [[ "$component" == mesa ]]; then
+        ui_action 1 "$(msg '更新/安装 Mesa（包含视频驱动）' 'Update/install Mesa (includes video driver)')"
+        ui_action 2 "$(msg '卸载 Mesa（包含视频驱动）' 'Uninstall Mesa (includes video driver)')" '' "$COLOR_RED"
+        ui_action 3 "$(msg '切换 OpenGL / Vulkan 路径' 'Switch OpenGL / Vulkan paths')"
+        ui_action 4 "$(msg '选择 Mesa 版本' 'Select Mesa version')"
+        ui_action 5 "$(msg '视频编解码' 'Video codecs')" "$(msg '驱动维护与实时监控' 'Driver maintenance and live monitoring')"
+    else
+        ui_action 1 "$(msg '更新/安装' 'Update/install')"
+        ui_action 2 "$(msg '卸载' 'Uninstall')" '' "$COLOR_RED"
+    fi
+    ui_footer 0 "$(msg '返回' 'Back')"
+}
+
+draw_main_menu_content() {
+    draw_header "$(msg '组件管理' 'Components')"
+    ui_blank
+    ui_group "$(msg '图形与桌面' 'Graphics & desktop')"
+    print_component_status 1 'Mesa + VA-API' mesa
+    if [[ "$DESKTOP_COMPONENT_MODE" == direct ]]; then
+        print_component_status 2 "$DESKTOP_COMPONENT_LABEL" "$DESKTOP_COMPONENT"
+    else
+        ui_status_row 2 "$(msg 'Anland 桌面/会话' 'Anland desktop/session')" "$(desktop_selection_status_display)"
+    fi
+    ui_blank
+    ui_group "$(msg 'Windows 应用' 'Windows apps')"
+    print_component_status 3 'Hangover Wine' hangover
+    print_component_status 4 "$(msg 'Wine 字体' 'Wine fonts')" fonts
+    ui_blank
+    ui_group "$(msg '工具' 'Tools')"
+    ui_action_pair S "$(msg '软件源设置' 'Source settings')" C "$(msg '清理下载缓存' 'Clean download cache')"
+    ui_action_pair R "$(msg '回收镜像空间' 'Reclaim image space')" U "$(msg '检查与安装更新' 'Check & install updates')"
+    ui_action A "$(msg '关于与支持范围' 'About & support')"
+    ui_footer Q "$(msg '退出' 'Quit')"
+}
+
+video_codec_menu() {
+    local choice read_status
+    begin_dynamic_menu
+    while :; do
+        poll_component_version_checks
+        if [[ "$DYNAMIC_MENU_DRAWN" == false || "$COMPONENT_STATUS_CHANGED" == true ]] || \
+            ! dynamic_ui_supported; then
+            draw_dynamic_menu_frame
+            draw_video_menu_content
+        fi
+        draw_dynamic_menu_prompt
+        read_dynamic_menu_choice
+        read_status=$?
+        if ((read_status == 2)); then
+            restore_dynamic_menu_echo
+            return
+        fi
+        ((read_status == 0)) || continue
+        choice="$MENU_CHOICE"
+        case "${choice,,}" in
+            1|2|3)
+                restore_dynamic_menu_echo
+                case "$choice" in
+                    1) run_video_action update ;;
+                    2) run_video_action uninstall ;;
+                    3) run_video_action monitor ;;
+                esac
+                begin_dynamic_menu
+                ;;
+            0|q) restore_dynamic_menu_echo; return ;;
+        esac
+    done
+}
+
 component_menu() {
     local component="$1" label="$2" choice read_status
     begin_dynamic_menu
@@ -1406,28 +1810,7 @@ component_menu() {
         if [[ "$DYNAMIC_MENU_DRAWN" == false || "$COMPONENT_STATUS_CHANGED" == true ]] || \
             ! dynamic_ui_supported; then
             draw_dynamic_menu_frame
-            draw_header
-            printf '\n%b%s%b\n\n' "$COLOR_BOLD" "$label" "$COLOR_RESET"
-            printf '  %s: %s\n' "$(msg '状态' 'Status')" "$(component_status_display "$component")"
-            printf '  %s: %s\n' "$(msg '当前版本' 'Installed version')" \
-                "${COMPONENT_CURRENT_VERSIONS[$component]}"
-            printf '  %s: %s\n\n' "$(msg '上游版本' 'Upstream version')" \
-                "$(component_upstream_display "$component")"
-            if [[ "$component" == mesa ]]; then
-                printf '  %s: %b%s%b\n' "$(msg '当前 OpenGL 配置' 'Current OpenGL configuration')" "$COLOR_GREEN" "$(gpu_status_display current opengl)" "$COLOR_RESET"
-                printf '  %s: %b%s%b\n' "$(msg '下次启动 OpenGL 配置' 'Saved OpenGL configuration')" "$COLOR_LIGHT_YELLOW" "$(gpu_status_display saved opengl)" "$COLOR_RESET"
-                printf '  %s: %b%s%b\n' "$(msg '当前 Vulkan 配置' 'Current Vulkan configuration')" "$COLOR_GREEN" "$(gpu_status_display current vulkan)" "$COLOR_RESET"
-                printf '  %s: %b%s%b\n\n' "$(msg '下次启动 Vulkan 配置' 'Saved Vulkan configuration')" "$COLOR_LIGHT_YELLOW" "$(gpu_status_display saved vulkan)" "$COLOR_RESET"
-            fi
-            printf '  %b[1]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '更新/安装' 'Update/install')"
-            printf '  %b[2]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '卸载' 'Uninstall')"
-            if [[ "$component" == mesa ]]; then
-                printf '  %b[3]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '切换 OpenGL / Vulkan 路径' 'Switch OpenGL / Vulkan paths')"
-                printf '  %b[4]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '选择 Mesa 版本' 'Select Mesa version')"
-                printf '  %b[5]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '更新媒体解码驱动' 'Update media decode driver')"
-                printf '  %b[6]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '卸载媒体解码驱动' 'Uninstall media decode driver')"
-            fi
-            printf '  %b[0]%b %s\n\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '返回' 'Back')"
+            draw_component_menu_content "$component" "$label"
         fi
         draw_dynamic_menu_prompt
         read_dynamic_menu_choice
@@ -1457,15 +1840,16 @@ component_menu() {
                     begin_dynamic_menu
                 fi
                 ;;
-            4|5|6)
+            4|5)
                 if [[ "$component" == mesa ]]; then
                     restore_dynamic_menu_echo
                     case "$choice" in
-                        4) run_component mesa "$(msg '选择 Mesa 版本' 'Select Mesa version')" --choose-version --mesa-only ;;
-                        5) run_component mesa "$(msg '更新媒体解码驱动' 'Update media decode driver')" --media-only ;;
-                        6) run_component mesa "$(msg '卸载媒体解码驱动' 'Uninstall media decode driver')" --media-only --uninstall ;;
+                        4)
+                            run_component mesa "$(msg '选择 Mesa 版本' 'Select Mesa version')" --choose-version --mesa-only
+                            return
+                            ;;
+                        5) video_codec_menu; begin_dynamic_menu ;;
                     esac
-                    return
                 fi
                 ;;
             0|q)
@@ -2161,27 +2545,7 @@ main_menu() {
         if [[ "$DYNAMIC_MENU_DRAWN" == false || "$COMPONENT_STATUS_CHANGED" == true ]] || \
             ! dynamic_ui_supported; then
             draw_dynamic_menu_frame
-            draw_header
-            printf '\n%b%s%b\n\n' "$COLOR_BOLD" "$(msg '组件管理' 'Component management')" "$COLOR_RESET"
-            print_component_status "1" "Mesa + MediaCodec VA-API" "mesa"
-            print_component_status "2" "Hangover Wine" "hangover"
-            print_component_status "3" "$(msg 'Wine 字体' 'Wine fonts')" "fonts"
-            if [[ "$DESKTOP_COMPONENT_MODE" == direct ]]; then
-                print_component_status "4" "$DESKTOP_COMPONENT_LABEL" "$DESKTOP_COMPONENT"
-            else
-                printf '  %b[4]%b %s - %s\n' \
-                    "$COLOR_CYAN" "$COLOR_RESET" \
-                    "$(msg 'Anland 桌面/会话组件' 'Anland desktop/session components')" \
-                    "$(desktop_selection_status_display)"
-            fi
-            printf '\n'
-            printf '  %b[S]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '软件源设置' 'Source settings')"
-            printf '  %b[C]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '清理下载缓存' 'Clean download cache')"
-            printf '  %b[R]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" \
-                "$(msg '回收存储空间（稀疏镜像）' 'Reclaim storage (sparse image)')"
-            printf '  %b[U]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '检查与安装更新' 'Check for and install updates')"
-            printf '  %b[A]%b %s\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '关于与支持范围' 'About and support')"
-            printf '  %b[Q]%b %s\n\n' "$COLOR_CYAN" "$COLOR_RESET" "$(msg '退出' 'Quit')"
+            draw_main_menu_content
         fi
         draw_dynamic_menu_prompt
         read_dynamic_menu_choice
@@ -2198,16 +2562,16 @@ main_menu() {
             *) continue ;;
         esac
         case "${choice,,}" in
-            1) component_menu "mesa" "Mesa + MediaCodec VA-API" ;;
-            2) component_menu "hangover" "Hangover Wine" ;;
-            3) component_menu "fonts" "$(msg 'Wine 字体' 'Wine fonts')" ;;
-            4)
+            1) component_menu "mesa" "Mesa + VA-API" ;;
+            2)
                 if [[ "$DESKTOP_COMPONENT_MODE" == direct ]]; then
                     component_menu "$DESKTOP_COMPONENT" "$DESKTOP_COMPONENT_LABEL"
                 else
                     desktop_component_selection_menu
                 fi
                 ;;
+            3) component_menu "hangover" "Hangover Wine" ;;
+            4) component_menu "fonts" "$(msg 'Wine 字体' 'Wine fonts')" ;;
             s) source_settings_menu ;;
             c) manage_cache ;;
             r) reclaim_sparse_storage ;;

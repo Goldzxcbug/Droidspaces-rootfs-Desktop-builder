@@ -308,7 +308,8 @@ install_build_packages() {
             apt-get update
             apt-get install -y --no-install-recommends -- "${missing[@]}"
             ;;
-        dnf) dnf install -y --setopt=install_weak_deps=False -- "${missing[@]}" ;;
+        # Fedora 43 的 DNF5 不支持此处的 --；包名均来自上面的固定列表。
+        dnf) dnf install -y --setopt=install_weak_deps=False "${missing[@]}" ;;
         pacman) pacman -S --noconfirm --needed --asdeps -- "${missing[@]}" ;;
     esac
 }

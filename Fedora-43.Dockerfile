@@ -44,11 +44,15 @@ COPY scripts/configure-desktop.sh /usr/local/sbin/configure-desktop
 COPY scripts/configure-chrome.sh /usr/local/sbin/configure-chrome
 COPY scripts/start-desktop-session.sh /usr/local/bin/start-desktop-session
 COPY scripts/desktops/ /usr/local/lib/droidspaces/desktops/
+COPY scripts/etc/pipewire/client.conf.d/90-droidspaces-portal-rt-workaround.conf /tmp/90-droidspaces-portal-rt-workaround.conf
 COPY scripts/etc/wireplumber/wireplumber.conf.d/Anland-Audio.conf /tmp/Anland-Audio.conf
-RUN if [ "$DISPLAY_BACKEND" = "anland-wayland" ]; then \
+RUN if [ "$DESKTOP" = "kde" ] || [ "$DESKTOP" = "kde-mobile" ]; then \
+        install -D -m 0644 /tmp/90-droidspaces-portal-rt-workaround.conf /etc/pipewire/client.conf.d/90-droidspaces-portal-rt-workaround.conf; \
+    fi && \
+    if [ "$DISPLAY_BACKEND" = "anland-wayland" ]; then \
         install -D -m 0644 /tmp/Anland-Audio.conf /etc/wireplumber/wireplumber.conf.d/Anland-Audio.conf; \
     fi && \
-    rm -f /tmp/Anland-Audio.conf
+    rm -f /tmp/90-droidspaces-portal-rt-workaround.conf /tmp/Anland-Audio.conf
 
 # Fedora 容器基础镜像默认只解包 en_US 翻译文件，桌面的 zh_CN 翻译会在
 # RPM 安装时被过滤；全局放开全部语言，供所有桌面共用。

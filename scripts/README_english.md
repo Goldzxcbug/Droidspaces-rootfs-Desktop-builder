@@ -117,6 +117,8 @@ Desktop translation files are enabled globally by each Dockerfile before package
 
 All seven Dockerfiles and the reusable workflow already use the generic profile interface, so an ordinary X11 desktop does not require copied Dockerfiles. Profiles that require patched Wayland packages must also map to a package family in `lib/anland-build.sh` through `anland_package_family`.
 
+All distributions install `etc/pipewire/client.conf.d/90-droidspaces-portal-rt-workaround.conf` into `/etc/pipewire/client.conf.d/` only when KDE or KDE Mobile is selected. Other desktop and command-line images do not install this configuration. It sets `rtportal.enabled = false` in `module.rt.args` to avoid the Realtime portal returning a zero budget when RTKit is unavailable, which makes PipeWire clients set `RLIMIT_RTTIME=0` and receive a kernel `SIGKILL`. Direct realtime scheduling and direct RTKit fallback remain enabled. See [xdg-desktop-portal #2110](https://github.com/flatpak/xdg-desktop-portal/issues/2110) and [#2139](https://github.com/flatpak/xdg-desktop-portal/pull/2139) for the issue and proposed fix. Every KDE and KDE Mobile distribution profile explicitly installs `xdg-desktop-portal` and `xdg-desktop-portal-kde`;
+
 ## Anland KDE Installer
 
 `install-anland-kde.sh` reads `anland-kde-manifest` from the fixed `anland-kde-packages` rolling Release in `Goldzxcbug/droidspaces-package` by default, then installs the matching patched KWin/Xwayland packages for Debian 13, Ubuntu 26.04, Fedora 43/44, or Arch Linux on ARM64.

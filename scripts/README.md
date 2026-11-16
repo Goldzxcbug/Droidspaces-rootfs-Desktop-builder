@@ -117,6 +117,8 @@ sudo ./scripts/tui/install-mesa.sh --3  # CNB
 
 七个 Dockerfile 和核心工作流已经使用通用 profile 接口，普通 X11 桌面无需复制 Dockerfile。依赖 patched Wayland 包的 profile 还需在 `lib/anland-build.sh` 的 `anland_package_family` 中登记包族。
 
+所有发行版仅在选择 KDE 或 KDE Mobile 时，将 `etc/pipewire/client.conf.d/90-droidspaces-portal-rt-workaround.conf` 安装到 `/etc/pipewire/client.conf.d/`；其他桌面和纯命令行镜像不会安装这份配置。该配置在 `module.rt.args` 中设置 `rtportal.enabled = false`，避开 Realtime portal 在 RTKit 不可用时返回零预算、导致 PipeWire 客户端设置 `RLIMIT_RTTIME=0` 并被内核以 `SIGKILL` 终止的问题；直接实时调度和直接 RTKit 回退仍保留。问题与修复讨论见 [xdg-desktop-portal #2110](https://github.com/flatpak/xdg-desktop-portal/issues/2110) 和 [#2139](https://github.com/flatpak/xdg-desktop-portal/pull/2139)。KDE 与 KDE Mobile 的各发行版 profile 均显式安装 `xdg-desktop-portal` 和 `xdg-desktop-portal-kde`。
+
 ## Anland KDE 安装器
 
 `install-anland-kde.sh` 默认从 `Goldzxcbug/droidspaces-package` 的固定滚动 Release `anland-kde-packages` 读取 `anland-kde-manifest`，为 Debian 13、Ubuntu 26.04、Fedora 43/44 或 Arch Linux ARM64 安装匹配版本的 patched KWin/Xwayland 包。

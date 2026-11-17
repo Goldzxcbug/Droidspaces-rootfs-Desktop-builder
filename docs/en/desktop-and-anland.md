@@ -32,8 +32,6 @@ startplasma-x11
 
 Anland Wayland supports Debian 13, Ubuntu 26, Fedora 43/44, and Arch. Arch KDE uses Anland Wayland only. KDE uses patched KWin/Xwayland; GNOME uses patched Mutter and installs a full desktop with common applications. Niri, Hyprland, Mango, and Denial include a lightweight session, terminal, XDG portal, audio, and fonts for users to extend. Their ARM64 packages are published by [`droidspaces-package`](https://github.com/Goldzxcbug/droidspaces-package) and installed from the matching Release during RootFS creation.
 
-Each lightweight compositor has its own `desktops/<slug>.sh` profile; the profile writes the session and Anland/Mesa environment to `/etc/environment`, like the other desktop profiles. The shared desktop launcher runs each packaged compositor command directly without a session wrapper.
-
 Prepare the Android device:
 
 1. Download the device-matching `virtual-drm-daemon.zip` from [Anland Releases](https://github.com/superturtlee/anland/releases), install it as documented by that project, and reboot.
@@ -51,18 +49,16 @@ Start the container and log in as the normal user. For KDE run `startplasma-wayl
 
 ### Install or update Anland desktop packages
 
-The build fetches matching packages automatically. To install them separately in a running ARM64 RootFS, run from the repository root:
+The build fetches matching packages automatically. To install them separately in a running ARM64 RootFS, run inside the container:
 
 ```bash
-sudo ./scripts/tui/install-anland-kde.sh
+sudo install-anland-kde
 ```
 
 The GNOME installer runs on Debian 13, Ubuntu 26, Fedora 43/44, and Arch Linux ARM:
 
 ```bash
-sudo ./scripts/tui/install-anland-gnome.sh
+sudo install-anland-gnome
 ```
-
-The in-container installer supports Debian, Ubuntu, Fedora, and Arch packages and reads the matching target from the `anland-gnome-packages` Release manifest.
 
 See the [script guide](../../scripts/README_english.md#anland-kde-installer) for installer options, download sources, and verification.

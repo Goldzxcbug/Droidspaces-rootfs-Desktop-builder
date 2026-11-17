@@ -8,22 +8,14 @@
 
 | 文件 | 运行位置 | 作用 |
 | --- | --- | --- |
+| `install-rootfs-tools.sh` | RootFS 构建环境 | 统一安装镜像内的命令、桌面 profile、TUI 来源记录及所选音频配置。 |
 | `install-desktop.sh`、`desktops/*.sh` | RootFS 构建环境 | 按稳定 slug 分发桌面 profile，并维护软件包集合和桌面专属环境变量。 |
 | `configure-desktop.sh` | RootFS 构建环境 | 写入桌面/显示后端配置，调用 profile 环境配置并按需安装统一自启动服务。 |
 | `configure-chrome.sh` | RootFS 构建环境 | 在所有支持 Chrome 的镜像中安装 Chrome；Anland Wayland 镜像额外配置硬件加速启动参数和桌面入口。 |
 | `start-desktop-session.sh` | Linux 容器 | 根据 `/etc/droidspaces-desktop.conf` 启动实际桌面会话。 |
-| `tui/droidspaces-tui.sh` | ARM64 Linux 容器 | 提供 TUI 1.7 终端菜单，调度 Mesa、视频编解码、Anland、Hangover Wine 和 Wine 字体维护。 |
-| `tui/droidspaces-video.sh` | Linux 容器 | 以 Bash、awk、jq 只读监控视频驱动会话，不依赖 Python 或常驻服务。 |
-| `tui/install-mesa.sh` | ARM64 Linux 容器 | 安装最新版 Android 容器专用 Mesa 和 视频编解码 VA-API 驱动，并锁定 Mesa 包。 |
-| `tui/install-hangover-wine.sh` | ARM64 Linux 容器 | 安装当前发行版对应的 Hangover Wine Release 包。 |
-| `tui/install-winefonts.sh` | Linux 容器 | 安装 Wine 字体包并刷新 fontconfig 字体缓存。 |
-| `tui/install-anland-kde.sh` | ARM64 Linux 容器 | 安装 Anland patched KWin/Xwayland Release 包，并锁定相关包。 |
-| `tui/install-anland-gnome.sh` | ARM64 Debian/Ubuntu/Fedora/Arch 容器 | 安装 Anland patched Mutter Release 包，并锁定相关包。 |
-| `tui/install-anland-next.sh` | ARM64 Debian/Ubuntu/Fedora/Arch 容器 | 安装 Anland Next session 包（mini-wm + patched Xwayland + patched bubblewrap）。 |
-| `tui/install-anland-niri.sh` | ARM64 Debian 13、Ubuntu 26、Fedora 43/44、Arch 容器 | 安装 Anland Niri 与共享的 patched Xwayland 包。 |
-| `tui/install-anland-hyprland.sh`、`install-anland-mango.sh`、`install-anland-denial.sh` | ARM64 Debian 13、Ubuntu 26、Fedora 43/44、Arch 容器 | 安装对应 compositor 与 patched Xwayland 包。 |
 | `install-anland-desktop.sh` | RootFS 构建环境 | 根据桌面 slug 分发到 KDE、GNOME、Niri、Hyprland、Mango、Denial 或 Anland Next 安装器。 |
 | `lib/anland-build.sh` | RootFS 构建宿主 | 为 native/QEMU 构建统一解析 Anland 包族、Release tag 和 revision。 |
+| `sync-tui.sh` | 开发与构建环境 | 从 `Gold-bug-tui` Release 下载并解压 TUI 压缩包，校验清单、摘要、大小、归档结构和脚本语法。 |
 | `install-usb-manager.sh` | Linux 容器 | 安装 Droidspaces USB Manager、发行版依赖、菜单入口和用户权限。 |
 | `systemd257.sh` | RootFS 构建环境 | 在需要时安装由包管理器管控的 systemd 257 完整包族，供旧 Android 内核使用。 |
 | `download-firmware` | Debian/Ubuntu 容器 | 安装并解压 `linux-firmware` 中的 `.zst` 固件。 |
@@ -32,9 +24,13 @@
 | `start/desktop-session.service` | Linux 容器的 systemd | 通过统一入口自动启动所选桌面会话。 |
 | `binfmt/*` | Linux 容器的 systemd/内核 | 检查并挂载 `binfmt_misc`，为 QEMU 跨架构执行做准备。 |
 
+构建入口先运行 `sync-tui.sh` 获取并解压 `Gold-bug-tui.tar.gz`，再将解压目录和 `scripts/` 作为 BuildKit 只读挂载交给 `install-rootfs-tools.sh` 安装。七个 Anland 入口分别保留，共享函数安装到 `/usr/local/lib/droidspaces/tui/`。KDE/KDE Mobile 镜像安装 PipeWire 配置；Anland Wayland 镜像安装 WirePlumber 配置。
+
+镜像内提供 `droidspaces-tui`、`droidspaces-gpu`、`droidspaces-video.sh`，以及 `install-mesa`、`install-hangover-wine`、`install-winefonts` 和各 `install-anland-*` 命令。TUI 与安装器的功能随构建时获取的发布版本提供。
+
 ## Droidspaces TUI
 
-构建出的 RootFS 内置 `droidspaces-tui` 命令，并提供较短的 `dstui`、`ds-tui` 别名。它以纯 Bash 提供统一终端菜单，不依赖 `dialog`，可在普通终端或 `adb shell -t` 中运行：
+在容器终端或 `adb shell -t` 中运行 `droidspaces-tui`，也可使用别名 `dstui`、`ds-tui`：
 
 ```bash
 droidspaces-tui
@@ -43,56 +39,96 @@ dstui
 ds-tui
 ```
 
-从仓库检出目录运行时使用：
+在仓库检出目录中，先下载发布文件再运行：
 
 ```bash
-./scripts/tui/droidspaces-tui.sh
+bash scripts/sync-tui.sh --output .build/tui
+bash .build/tui/droidspaces-tui.sh
 ```
 
-TUI 1.7 的主菜单按图形与桌面、Windows 应用和工具分组，依次为 `[1] Mesa + VA-API`、`[2] Anland`、`[3] Hangover Wine` 和 `[4] Wine 字体`。按终端显示宽度对齐中文，适配 60×24、80×24 和 120×30 终端，使用数字/字母快捷键并按 Enter 确认。组件状态用黄色“检测到更新”、绿色“已是最新”或红色“未安装”表示，查询中和失败时另行提示。
+主菜单提供以下组件。输入数字或字母快捷键，再按 Enter 确认。
 
-桌面/会话项严格解析 `/etc/droidspaces-desktop.conf`：KDE/KDE mobile 只显示 Anland KDE，GNOME 只显示 Anland GNOME，Niri/Hyprland/Mango/Denial 显示匹配的 compositor，Anland Next 只显示其 session；`none` 或未知桌面进入组件选择页。旧 RootFS 缺少配置文件时才按已安装的 Anland 组件兜底，无法判断时同样进入选择页。选择组件后进入版本详情，可更新、安装或卸载。版本查询在后台并发运行，动态 Braille 符号表示正在查询，单项 10 秒内未取得有效版本时显示“超时”，且查询不会阻塞菜单输入。版本检测在启动 TUI 时运行，进入菜单、返回或输入无效内容不会重新检测；安装或卸载实际开始执行后，返回主菜单时会自动刷新一次。输入内容可见并支持退格，Loading 使用原地重绘，避免反复清屏闪烁。卸载 Mesa、KWin、Mutter 或 compositor 补丁会恢复发行版官方包，Hangover Wine 和 Wine 字体则移除自身内容。中文环境默认使用 CNB，其他语言环境默认使用 GitHub；下载源也可以统一改为自动测速、GitHub、`gh-proxy.com` 或 CNB。明确选择 CNB 时，TUI 不查询 GitHub API，安装器从同一 CNB Release 的同步清单取得附件名、SHA-256 和大小；旧发布未提供摘要时会明确提示并保留归档结构与包元数据校验。
+| 入口 | 操作 |
+| --- | --- |
+| `[1] Mesa + VA-API` | 安装、更新和卸载 Mesa，选择历史版本，配置 OpenGL/Vulkan，管理视频驱动。 |
+| `[2] Anland` | 查看桌面组件版本，安装、更新或卸载匹配的 Anland 组件。 |
+| `[3] Hangover Wine` | 安装、更新或卸载 Hangover Wine。 |
+| `[4] Wine 字体` | 安装、更新或卸载字体包。 |
+| `F` | 刷新组件状态和上游版本。 |
+| `C` | 清理 Hangover 清单缓存或全部下载缓存。 |
+| `U` | 检查更新，更新 TUI、受管安装脚本或全部内容。 |
 
-Mesa 页的 `[5] 视频编解码` 统一提供视频驱动更新/安装、卸载和实时监控。独立更新和卸载使用 `--media-only`，保留 Mesa 软件包；`[4] 选择 Mesa 版本` 使用 `--mesa-only`，保留视频驱动。视频版本和已安装文件的 SHA-256 独立记录在 `/var/lib/droidspaces-tui/components/video.version`，外部替换驱动后会提示版本未知。更新或卸载驱动后需重启相关应用。
+Anland 入口按 `/etc/droidspaces-desktop.conf` 显示对应桌面组件；`none` 或未知桌面进入组件选择页。旧镜像缺少配置时，按已安装的组件识别桌面。卸载 Mesa、KWin、Mutter 或 compositor 补丁时恢复发行版软件包；Hangover Wine 和 Wine 字体移除各自内容。
 
-实时监控由 `/usr/local/bin/droidspaces-video.sh` 提供，使用 Bash、awk、jq 和 GNU coreutils/findutils；七个发行版的基础工具集合已经包含这些依赖。监控继承当前用户身份，不自动提权、不启动常驻服务，只读扫描可访问的 `dmd-video-v1` 驱动会话。界面显示方向、视频格式、处理尺寸、输出 FPS 和硬件状态，按应用及 UID 分组；绿色表示驱动已报告硬件工作完成，黄色表示待确认或未知，红色表示错误。可读的 mpv、VLC、OBS 进程即使没有驱动会话也会列出，但不会据此推测软件编解码。
+组件状态包括未安装、已是最新、可更新、本地较新、版本未知和安装记录漂移。上游查询在后台运行，显示查询进度或具体错误。过期缓存自动刷新；断网时显示历史结果及检查时间。安装、卸载或切换下载源后自动刷新状态。
 
-输出 FPS 根据相邻采集的输出帧增量与内核采样时钟计算；首次采集显示 `--`，暂停后显示 0，不等于屏幕播放 FPS。处理尺寸可能包含硬件对齐，例如 1920×1088；监控不会将它改报为源显示尺寸。旧驱动、其他接口或进程权限可能使会话不可见，此时状态为未知。按 `q`、`Esc` 或 `Ctrl+C` 返回视频子菜单；`--no-color` 同时传入监控。独立运行支持 `bash /usr/local/bin/droidspaces-video.sh --once`、`--json` 和 `--interval 秒数`。
+### 下载源与更新
 
-构建时直接复制本仓库中的 TUI 和监控脚本；package 仓库的新提交不会自动替换这份副本。已部署 RootFS 可通过 `U` 更新，但更新源必须先发布新的 `Gold-bug-tui` Release。
-
-主菜单的 `C` 进入缓存管理。可以只清理 Hangover Release 清单缓存，解决滚动 Release 更新后旧清单无法续传的问题；也可以清空 `/var/cache/hangover-wine` 下的全部下载缓存。两项操作都需要确认，清空全部缓存会导致下次安装重新下载软件包。
-
-主菜单的 `U` 进入更新管理，可检查更新、只更新 TUI、只更新受管安装脚本，或更新全部。TUI 会临时获取固定标签 `Gold-bug-tui` 中的一次性安装脚本；GitHub/代理模式使用 GitHub Release API 与发布清单交叉校验，CNB 模式只读取 CNB 的同步清单进行 SHA-256 和大小校验，在替换前备份旧文件，并在操作结束后删除临时脚本。
-
-也可以在启动时指定初始来源：
+首次运行时，中文环境默认使用 CNB，其他语言环境默认使用 GitHub。下载源可选自动测速、GitHub、`gh-proxy.com` 或 CNB，也可在启动时指定：
 
 ```bash
 droidspaces-tui --source cnb
 droidspaces-tui --source github
 ```
 
+来源偏好保存在当前用户配置目录。GitHub/代理模式使用 GitHub Release API 与发布清单交叉校验；CNB 模式使用同步清单中的 SHA-256 和大小。旧发布缺少摘要时会提示，并检查归档结构和包元数据。
+
+`U` 从 `Gold-bug-tui` Release 获取更新，校验后备份并替换文件。`C` 可清理 `/var/cache/hangover-wine` 下的下载缓存；清空后，下次安装会重新下载软件包。
+
+### GPU 与视频编解码
+
+GPU 菜单分为概览、OpenGL 和 Vulkan 页面，驱动清单支持分页选择。
+
+Mesa 页的 `[5] 视频编解码` 提供视频驱动安装、更新、卸载和实时监控。单独操作视频驱动使用 `--media-only`；`[4] 选择 Mesa 版本` 使用 `--mesa-only`。视频版本和文件摘要记录在 `/var/lib/droidspaces-tui/components/video.version`。更新或卸载后需重启相关应用。
+
+实时监控读取当前用户有权访问的驱动会话，按应用及 UID 显示方向、格式、处理尺寸、输出 FPS 和硬件状态。绿色表示驱动已确认硬件工作完成，黄色表示待确认或未知，红色表示错误。可读的 mpv、VLC、OBS 进程也会列出；没有驱动遥测时，状态显示未知。
+
+输出 FPS 是相邻采样的驱动输出帧速率，首次采样显示 `--`，暂停后显示 0。它与屏幕播放帧率口径不同。处理尺寸可能包含硬件对齐，例如 1920×1088。旧驱动、其他接口或进程权限限制可能使会话不可见。按 `q`、`Esc` 或 `Ctrl+C` 返回菜单。
+
+独立运行监控：
+
+```bash
+droidspaces-video.sh --once
+droidspaces-video.sh --json
+droidspaces-video.sh --interval 2
+```
+
+监控使用 Bash、awk、jq 和 GNU coreutils/findutils，构建的镜像已包含这些工具。`--no-color` 关闭彩色输出。
+
+### 日志与故障恢复
+
+安装器和 GPU 配置操作共用修改锁。日志与阶段记录位于 `/var/lib/droidspaces-tui/operations/transactions`；非 root 预下载日志位于 `~/.local/state/droidspaces-tui/logs`。
+
+失败或中断后恢复已备份的配置；未完成的 TUI 文件更新在下次运行时恢复。软件包事务可能已完成，配置恢复不能回滚整次包安装。请根据日志重新运行对应安装器核验或修复。
+
+输出诊断状态：
+
+```bash
+droidspaces-tui --status
+droidspaces-tui --json
+```
+
 ## Mesa 安装器
 
-`install-mesa.sh` 在 GitHub/代理模式从分发 Release 选择当前发行版对应的 ARM64 Mesa 资产；CNB 模式则只读取同一 CNB Release 的 `mesa-distribution-manifest`。随后安装其中同步的 `msm_drm_drv_video.so`。支持 Debian 13、Ubuntu 24.04/25.10/26.04、Fedora 43/44 和 Arch Linux。视频编解码驱动按发行版安装到 libva 的默认驱动目录：Debian/Ubuntu 为 `/usr/lib/aarch64-linux-gnu/dri`，Fedora 为 `/usr/lib64/dri`，Arch Linux 为 `/usr/lib/dri`。
+`install-mesa` 在 GitHub/代理模式从分发 Release 选择当前发行版对应的 ARM64 Mesa 资产；CNB 模式则只读取同一 CNB Release 的 `mesa-distribution-manifest`。随后安装其中同步的 `msm_drm_drv_video.so`。支持 Debian 13、Ubuntu 24.04/25.10/26.04、Fedora 43/44 和 Arch Linux。视频编解码驱动按发行版安装到 libva 的默认驱动目录：Debian/Ubuntu 为 `/usr/lib/aarch64-linux-gnu/dri`，Fedora 为 `/usr/lib64/dri`，Arch Linux 为 `/usr/lib/dri`。
 
 安装器会严格检查 Release tag、资产名和下载内容。GitHub/代理模式保留 GitHub Release API 的 SHA-256 交叉校验；CNB 模式只使用 CNB 分发清单中的 SHA-256 与大小，并继续校验随 Release 同步的媒体驱动 `SHA256SUMS`。下载支持断点续传，临时文件在退出时自动清理。
 
-从仓库根目录交互运行：
+在容器内交互运行：
 
 ```bash
-sudo ./scripts/tui/install-mesa.sh
+sudo install-mesa
 ```
 
 未指定参数时，脚本会测试三个下载源并提示选择。也可以直接指定来源，适合无人值守构建：
 
 ```bash
-sudo ./scripts/tui/install-mesa.sh --1  # GitHub
-sudo ./scripts/tui/install-mesa.sh --2  # gh-proxy.com
-sudo ./scripts/tui/install-mesa.sh --3  # CNB
+sudo install-mesa --1  # GitHub
+sudo install-mesa --2  # gh-proxy.com
+sudo install-mesa --3  # CNB
 ```
 
-三个来源选项互斥，并同时作用于 Mesa 与视频编解码驱动下载。`-1`、`-2`、`-3` 是对应的短参数，`--help` 可查看内置帮助。GitHub/代理模式通过 GitHub Release API 交叉校验；CNB 模式只读取 CNB 分发清单。下载与摘要校验由安装器完成。
+三个来源选项互斥，并同时作用于 Mesa 与视频编解码驱动下载。`-1`、`-2`、`-3` 是对应的短参数，`--help` 可查看内置帮助。
 
 安装完成后，脚本按发行版写入持久锁定：
 
@@ -113,57 +149,57 @@ sudo ./scripts/tui/install-mesa.sh --3  # CNB
 3. 在 `start-desktop-session.sh` 添加会话命令；`install-desktop.sh` 会自动发现合法 slug 对应的可执行 profile。
 4. 在中英文工作流入口的 `desktop` 下拉中加入显示名称。
 
-桌面翻译文件由各 Dockerfile 在安装软件包前全局放开：Fedora 写入 `%_install_langs all`，Debian/Ubuntu 取消 dpkg 的 locale `path-exclude`，Arch 移除 `NoExtract`。profile 不再需要重复处理语言文件。
+依赖 patched Wayland 包的 profile 还需在 `lib/anland-build.sh` 的 `anland_package_family` 中登记包族。
 
-七个 Dockerfile 和核心工作流已经使用通用 profile 接口，普通 X11 桌面无需复制 Dockerfile。依赖 patched Wayland 包的 profile 还需在 `lib/anland-build.sh` 的 `anland_package_family` 中登记包族。
+桌面翻译文件由 Dockerfile 统一配置：Fedora 写入 `%_install_langs all`，Debian/Ubuntu 取消 dpkg 的 locale `path-exclude`，Arch 移除 `NoExtract`。
 
-所有发行版仅在选择 KDE 或 KDE Mobile 时，将 `etc/pipewire/client.conf.d/90-droidspaces-portal-rt-workaround.conf` 安装到 `/etc/pipewire/client.conf.d/`；其他桌面和纯命令行镜像不会安装这份配置。该配置在 `module.rt.args` 中设置 `rtportal.enabled = false`，避开 Realtime portal 在 RTKit 不可用时返回零预算、导致 PipeWire 客户端设置 `RLIMIT_RTTIME=0` 并被内核以 `SIGKILL` 终止的问题；直接实时调度和直接 RTKit 回退仍保留。问题与修复讨论见 [xdg-desktop-portal #2110](https://github.com/flatpak/xdg-desktop-portal/issues/2110) 和 [#2139](https://github.com/flatpak/xdg-desktop-portal/pull/2139)。KDE 与 KDE Mobile 的各发行版 profile 均显式安装 `xdg-desktop-portal` 和 `xdg-desktop-portal-kde`。
+KDE/KDE Mobile profile 安装 `xdg-desktop-portal`、`xdg-desktop-portal-kde`，并将 `etc/pipewire/client.conf.d/90-droidspaces-portal-rt-workaround.conf` 安装到 `/etc/pipewire/client.conf.d/`。该配置设置 `rtportal.enabled = false`。相关问题见 [xdg-desktop-portal #2110](https://github.com/flatpak/xdg-desktop-portal/issues/2110) 和 [#2139](https://github.com/flatpak/xdg-desktop-portal/pull/2139)。
 
 ## Anland KDE 安装器
 
-`install-anland-kde.sh` 默认从 `Goldzxcbug/droidspaces-package` 的固定滚动 Release `anland-kde-packages` 读取 `anland-kde-manifest`，为 Debian 13、Ubuntu 26.04、Fedora 43/44 或 Arch Linux ARM64 安装匹配版本的 patched KWin/Xwayland 包。
+`install-anland-kde` 默认从 `Goldzxcbug/droidspaces-package` 的固定滚动 Release `anland-kde-packages` 读取 `anland-kde-manifest`，为 Debian 13、Ubuntu 26.04、Fedora 43/44 或 Arch Linux ARM64 安装匹配版本的 patched KWin/Xwayland 包。
 
 ```bash
-sudo ./scripts/tui/install-anland-kde.sh
+sudo install-anland-kde
 ```
 
-它同样支持 `--1`、`--2`、`--3` 选择 GitHub、`gh-proxy.com` 或 `ghproxy.net`；省略时测速后交互选择。镜像下载的清单与归档均使用 GitHub API digest 校验。脚本按系统 locale 输出中文或英文，并通过 APT hold、DNF exclude 或 Pacman `IgnorePkg` 防止系统更新覆盖安装结果。
+使用 `--1`、`--2`、`--3` 选择 GitHub、`gh-proxy.com` 或 CNB；省略时测速后交互选择。GitHub/代理模式使用 GitHub API 摘要校验，CNB 模式使用同步清单校验。脚本按系统 locale 输出中文或英文，并通过 APT hold、DNF exclude 或 Pacman `IgnorePkg` 锁定相关包。
 
 安装公开 Fork 发布的包时只需覆盖仓库；Fork 必须提供固定标签 `anland-kde-packages`：
 
 ```bash
 sudo ANLAND_RELEASE_REPOSITORY=owner/repository \
-  ./scripts/tui/install-anland-kde.sh --1
+  install-anland-kde --1
 ```
 
 Anland 宿主模块、App、SELinux、绑定挂载和 Droidspaces 权限仍需按[Wayland 与 Anland 配置教程](../docs/zh/桌面与Anland.md#wayland-和-anland-宿主端配置)完成。
 
 ## Anland GNOME 安装器
 
-`install-anland-gnome.sh` 默认从固定滚动 Release `anland-gnome-packages` 读取 `anland-gnome-manifest`，为 Debian 13、Ubuntu 26.04 或 Arch Linux ARM64 安装 patched Mutter 运行时包。Arch 只安装 `mutter` 运行包，并通过 pacman `IgnorePkg` 防止升级覆盖；Debian/Ubuntu 使用 APT hold。GNOME 的各发行版软件包均由 `droidspaces-package` 发布，RootFS 构建与后续更新都通过 Release 清单获取对应归档。下载源选择、镜像 digest 校验和命令行参数与 KDE 安装器一致。
+`install-anland-gnome` 从固定滚动 Release `anland-gnome-packages` 的 `anland-gnome-manifest` 读取匹配归档，为 Debian 13、Ubuntu 26.04、Fedora 43/44 或 Arch Linux ARM64 安装 patched Mutter 运行时包。相关包通过 APT hold、DNF exclude 或 Pacman `IgnorePkg` 锁定。下载源和命令行参数与 KDE 安装器一致。
 
 ```bash
-sudo ./scripts/tui/install-anland-gnome.sh
+sudo install-anland-gnome
 ```
 
-使用公开 Fork 的包时同时覆盖 GNOME 仓库变量：
+使用公开 Fork 的包时覆盖仓库变量：
 
 ```bash
 sudo ANLAND_RELEASE_REPOSITORY=owner/repository \
-  ./scripts/tui/install-anland-gnome.sh --1
+  install-anland-gnome --1
 ```
 
 ## Anland Next 安装器
 
-`install-anland-next.sh` 默认从固定滚动 Release `anland-session-packages` 读取 `anland-session-manifest`，为 Debian 13、Ubuntu 26.04、Fedora 43/44 或 Arch Linux ARM64 安装 `anland-session` 包。下载源选择、镜像 digest 校验和命令行参数与 KDE 安装器一致。
+`install-anland-next` 默认从固定滚动 Release `anland-session-packages` 读取 `anland-session-manifest`，为 Debian 13、Ubuntu 26.04、Fedora 43/44 或 Arch Linux ARM64 安装 `anland-session` 包。下载源选择、镜像 digest 校验和命令行参数与 KDE 安装器一致。
 
 ```bash
-sudo ./scripts/tui/install-anland-next.sh
+sudo install-anland-next
 ```
 
-包内是三个预编译产物：`anland-miniwm`，以及打过 kgsl/turnip glamor 补丁的 Xwayland 与打过 mountinfo 索引补丁的 bubblewrap。后两者装在 `/usr/lib/anland/`，由会话把它前置到 PATH，发行版的同名二进制不会被覆盖，因此**不需要**像 KDE/GNOME 那样做软件包锁定 —— 这个包不替换任何发行版文件。
+包内包含 `anland-miniwm`、patched Xwayland 和 patched bubblewrap。后两者位于 `/usr/lib/anland/`，由会话加入 PATH。
 
-会话本体是包内的 `/usr/bin/anland-session`（会话 D-Bus + wayland 链接 + rootless Xwayland + mini-wm），配合 `/usr/lib/systemd/user/anland-session.service` 使用，不往用户家目录写任何东西。
+会话入口为 `/usr/bin/anland-session`，配合 `/usr/lib/systemd/user/anland-session.service` 使用。
 
 Anland Next profile 默认让 Qt 6 应用使用原生 Wayland，并显式安装对应平台插件；直接通过终端启动时，用户 shell 会读取运行中的 `~/.anlandx-env`。
 
@@ -171,15 +207,20 @@ Anland Next profile 默认让 Qt 6 应用使用原生 Wayland，并显式安装�
 
 ```bash
 sudo ANLAND_NEXT_RELEASE_REPOSITORY=owner/repository \
-  ./scripts/tui/install-anland-next.sh --1
+  install-anland-next --1
 ```
 
-## Anland Niri 安装器
+## Anland Niri、Hyprland、Mango 和 Denial 安装器
 
 Niri、Hyprland、Mango 和 Denial 安装器从各自固定滚动 Release 安装 compositor 与 patched `xorg-xwayland`，支持 Debian 13、Ubuntu 26、Fedora 43/44 和 Arch ARM64。四个桌面在 `scripts/desktops/<slug>.sh` 各有独立 profile；profile 提供终端、XDG portal、音频和字体等基础服务，Niri 在 Arch 上还包含常用桌面工具。各 compositor 共用 patched Xwayland；安装器会阻止互相覆盖，并在卸载时保留其他组件使用的包。
 
+按桌面选择其中一个命令：
+
 ```bash
-sudo ./scripts/tui/install-anland-niri.sh
+sudo install-anland-niri
+sudo install-anland-hyprland
+sudo install-anland-mango
+sudo install-anland-denial
 ```
 
 ## USB Manager 安装器
@@ -192,7 +233,7 @@ sudo ./scripts/install-usb-manager.sh --user "$USER"
 
 `--user USER` 指定获得 USB 管理权限和桌面入口的用户。省略时依次尝试 `SUDO_USER`、当前登录用户和第一个普通用户。开发或离线测试可以通过 `--source DIR` 使用本地 Droidspaces-USB-Manager 源码目录；运行 `--help` 查看完整参数。
 
-在普通 Arch 系统上，安装器会照常安装 `systemd` 和其他依赖。若检测到 `/etc/droidspaces-systemd257`，重复运行时会保留 Pacman 的 `IgnorePkg` 锁定，不再把 `systemd` 作为显式安装目标；PyQt5、ADB、NTFS、exFAT 等 USB Manager 依赖仍会正常补齐。
+Arch 系统存在 `/etc/droidspaces-systemd257` 时，安装器保留 systemd 的 Pacman 锁定，并安装其余依赖。
 
 RootFS 导入 Droidspaces 时必须开启硬件访问，否则容器无法看到 `/sys/bus/usb` 和 `/sys/bus/scsi`。
 
@@ -223,19 +264,42 @@ sudo download-firmware
 - `binfmt/qemu-binfmt-register.sh` 与对应 service 检查内核是否支持 `binfmt_misc`，必要时挂载它；不支持时安全跳过。实际跨架构执行仍需要 QEMU 解释器。
 - `bashrc.sh` 是追加到用户 shell 环境的辅助配置，不应作为独立安装器执行。
 
-## 开发检查
+## TUI 下载与维护
 
-修改 shell 脚本后，至少运行语法检查；安装了 ShellCheck 时也应执行静态检查：
+TUI 源码在 [`droidspaces-package`](https://github.com/Goldzxcbug/droidspaces-package) 仓库维护。RootFS 构建从该仓库的 `Gold-bug-tui` 滚动 Release 获取当前发布。
+
+在本仓库根目录下载：
 
 ```bash
-bash -n scripts/tui/install-mesa.sh
-bash -n scripts/tui/droidspaces-tui.sh
-bash -n scripts/tui/install-anland-kde.sh
-bash -n scripts/tui/install-anland-gnome.sh
-bash -n scripts/tui/install-anland-next.sh
-bash -n scripts/install-usb-manager.sh
-shellcheck scripts/tui/install-mesa.sh
-shellcheck scripts/tui/droidspaces-tui.sh
+bash scripts/sync-tui.sh --output .build/tui
 ```
 
-涉及软件包安装和锁定配置的改动，还应分别在 APT、DNF 和 Pacman 容器中验证，并重复运行一次检查幂等性。
+使用 CNB 镜像：
+
+```bash
+bash scripts/sync-tui.sh --output .build/tui --source cnb
+```
+
+下载器使用 Bash、curl、GNU tar/coreutils、gzip 和 util-linux 的 `flock`。先校验发布清单与 `Gold-bug-tui.tar.gz` 的 SHA-256 和大小，再检查归档路径、文件类型、重复条目及展开大小，拒绝链接和目录穿越；解压后按 `Gold-bug-tui-files` 校验各入口与 `lib/*.sh` 的摘要、大小和 Shell 语法。压缩包上限为 32 MiB，展开文件合计上限为 64 MiB，单个脚本上限为 8 MiB，归档最多包含 128 个条目。下载期间发布内容发生变化或校验失败时，构建停止并保留原下载目录。下载产物位于 `.build/tui`，不提交到仓库。
+
+native/QEMU 构建入口下载到各自的临时目录，交给 Docker 安装，并在结束后清理。默认使用 GitHub；设置 `DROIDSPACES_TUI_SOURCE=cnb` 可改用 CNB。每次构建查询当前发布；同一 RootFS 仓库提交在不同时间构建时，可能包含不同的 TUI 版本。镜像在 `/usr/local/share/droidspaces-tui/` 保存本次发布清单 `Gold-bug-tui-manifest` 和文件清单 `Gold-bug-tui-files`。离线 `--check` 同时检查两份清单的 revision、库文件以及入口摘要。
+
+校验已经下载的文件：
+
+```bash
+bash scripts/sync-tui.sh --output .build/tui --check
+```
+
+## 开发检查
+
+在仓库根目录运行语法和静态检查：
+
+```bash
+bash -n scripts/sync-tui.sh
+bash -n scripts/install-rootfs-tools.sh
+bash -n scripts/install-usb-manager.sh
+shellcheck scripts/sync-tui.sh
+shellcheck scripts/install-rootfs-tools.sh
+```
+
+TUI 和 Anland 安装器在 package 仓库直接维护，并运行语法和静态检查。涉及软件包安装和锁定配置的改动，应分别在 APT、DNF 和 Pacman 容器中验证，并重复运行一次检查幂等性。

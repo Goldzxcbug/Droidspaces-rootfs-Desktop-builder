@@ -20,7 +20,7 @@ Choose the target, desktop, display backend, and optional features on the GitHub
 
 | Desktop | Description |
 | --- | --- |
-| `none` | Command-line environment for SSH, development, or a custom desktop. |
+| `none` | Command-line environment. |
 | `KDE` | KDE Plasma; Arch supports Anland Wayland only, while other supported targets may use X11 or Anland Wayland. |
 | `KDE mobile` | Touch-first Plasma Mobile; requires Anland Wayland. |
 | `GNOME` | A full Anland Wayland desktop on Debian 13, Ubuntu 26, Fedora 43/44, and Arch Linux ARM, with a terminal, file manager, settings, system monitor, keyring, portal, and common document/media apps. |
@@ -55,10 +55,7 @@ For exact defaults, see `.github/workflows/build-rootfs-releases-en.yml` and `bu
 
 ## Generated Droidspaces recommendations
 
-Native and QEMU builds generate `container.config` from the effective build options.
-It is the first regular archive member, followed by the rootfs and then XZ compression.
-Old root-level copies are removed; no additional Dockerfile `COPY` is needed.
-Droidspaces versions with recommendation support prefill their installation wizard.
+Native and QEMU builds generate `container.config` from the effective build options and include it in the RootFS archive. Droidspaces versions with recommendation support prefill their installation wizard from this file.
 
 | Build option | Recommended setting |
 | --- | --- |
@@ -71,9 +68,4 @@ Droidspaces versions with recommendation support prefill their installation wiza
 | Anland Next | `bind_mounts=/data/local/tmp/awl:/run/anland` |
 | `enable_zh_tz=true` (Chinese locale and Shanghai timezone) | `dns_servers=114.114.114.114` |
 
-Keys follow the Droidspaces Anland branch. Mount paths live in the config and use
-the existing Droidspaces bind-mount parser and runtime. Environment variables are
-not passed through this recommendation file. On kernels without user namespaces,
-the requested KDE setting stays checked but disabled; this does not add kernel support.
-
-Run the mapping and archive checks with `python3 -m unittest discover -s tests -v`.
+Mount paths are set through `bind_mounts`; environment variables cannot be set through this file. When the host kernel does not support user namespaces, the corresponding KDE option remains checked but disabled and unavailable.

@@ -8,22 +8,14 @@ This directory contains installers used while building the RootFS, maintenance t
 
 | File | Run in | Purpose |
 | --- | --- | --- |
+| `install-rootfs-tools.sh` | RootFS build environment | Installs the image's commands, desktop profiles, TUI provenance record, and selected audio configuration. |
 | `install-desktop.sh`, `desktops/*.sh` | RootFS build environment | Dispatches stable desktop profile slugs and owns package sets and desktop-specific environment variables. |
 | `configure-desktop.sh` | RootFS build environment | Writes desktop/backend configuration, invokes profile environment setup, and optionally installs the common auto-start service. |
 | `configure-chrome.sh` | RootFS build environment | Installs Chrome in all supported images, then configures hardware-acceleration flags and desktop launchers for Anland Wayland images. |
 | `start-desktop-session.sh` | Linux container | Starts the selected session from `/etc/droidspaces-desktop.conf`. |
-| `tui/droidspaces-tui.sh` | ARM64 Linux container | Provides the TUI 1.7 menu for Mesa, video codecs, Anland, Hangover Wine, and Wine fonts. |
-| `tui/droidspaces-video.sh` | Linux container | Uses Bash, awk, and jq to read video driver sessions without Python or a daemon. |
-| `tui/install-mesa.sh` | ARM64 Linux container | Installs the latest Android-container Mesa build and video encode/decode VA-API driver, then locks Mesa packages. |
-| `tui/install-hangover-wine.sh` | ARM64 Linux container | Installs the Hangover Wine Release packages matching the current distribution. |
-| `tui/install-winefonts.sh` | Linux container | Installs the Wine font bundle and refreshes the fontconfig cache. |
-| `tui/install-anland-kde.sh` | ARM64 Linux container | Installs Anland patched KWin/Xwayland Release packages and locks them. |
-| `tui/install-anland-gnome.sh` | ARM64 Debian/Ubuntu/Fedora/Arch container | Installs Anland patched Mutter Release packages and locks them. |
-| `tui/install-anland-next.sh` | ARM64 Debian/Ubuntu/Fedora/Arch container | Installs the Anland Next session package (mini-wm + patched Xwayland + patched bubblewrap). |
-| `tui/install-anland-niri.sh` | ARM64 Debian 13, Ubuntu 26, Fedora 43/44, and Arch container | Installs Anland Niri and its shared patched Xwayland package. |
-| `tui/install-anland-hyprland.sh`, `install-anland-mango.sh`, `install-anland-denial.sh` | ARM64 Debian 13, Ubuntu 26, Fedora 43/44, and Arch container | Installs the compositor and its patched Xwayland package. |
 | `install-anland-desktop.sh` | RootFS build environment | Dispatches a desktop slug to KDE, GNOME, Niri, Hyprland, Mango, Denial, or Anland Next. |
 | `lib/anland-build.sh` | RootFS build host | Resolves the Anland package family, Release tag, and revision for native/QEMU builds. |
+| `sync-tui.sh` | Development and build environment | Downloads and extracts the TUI archive from the `Gold-bug-tui` Release and checks manifests, digests, sizes, archive structure, and script syntax. |
 | `install-usb-manager.sh` | Linux container | Installs Droidspaces USB Manager, distribution dependencies, launchers, and user permissions. |
 | `systemd257.sh` | RootFS build environment | Installs a complete package-manager-owned systemd 257 family when required by an old Android kernel. |
 | `download-firmware` | Debian/Ubuntu container | Installs `linux-firmware` and decompresses its `.zst` firmware. |
@@ -32,9 +24,13 @@ This directory contains installers used while building the RootFS, maintenance t
 | `start/desktop-session.service` | Linux container systemd | Starts the selected desktop session through one common entry point. |
 | `binfmt/*` | Linux container systemd/kernel | Checks and mounts `binfmt_misc` for QEMU cross-architecture execution. |
 
+The build entry points run `sync-tui.sh` to fetch and extract `Gold-bug-tui.tar.gz`, then pass the extracted directory and `scripts/` as read-only BuildKit mounts to `install-rootfs-tools.sh`. The seven Anland entry points are retained, with shared functions installed under `/usr/local/lib/droidspaces/tui/`. KDE/KDE Mobile images include the PipeWire configuration; Anland Wayland images include the WirePlumber configuration.
+
+Images provide `droidspaces-tui`, `droidspaces-gpu`, `droidspaces-video.sh`, `install-mesa`, `install-hangover-wine`, `install-winefonts`, and the `install-anland-*` commands. Their features follow the release fetched during the build.
+
 ## Droidspaces TUI
 
-Built RootFS images provide the `droidspaces-tui` command with the shorter `dstui` and `ds-tui` aliases. It is a pure Bash terminal menu with no `dialog` dependency and works in a regular terminal or through `adb shell -t`:
+Run `droidspaces-tui` in the container terminal or through `adb shell -t`. The aliases `dstui` and `ds-tui` are also available:
 
 ```bash
 droidspaces-tui
@@ -43,56 +39,96 @@ dstui
 ds-tui
 ```
 
-Run it from a repository checkout with:
+From a repository checkout, download the release files first:
 
 ```bash
-./scripts/tui/droidspaces-tui.sh
+bash scripts/sync-tui.sh --output .build/tui
+bash .build/tui/droidspaces-tui.sh
 ```
 
-TUI 1.7 groups the main menu into graphics and desktop, Windows apps, and tools. Its entries are `[1] Mesa + VA-API`, `[2] Anland`, `[3] Hangover Wine`, and `[4] Wine fonts`. Labels use terminal cell widths and fit 60×24, 80×24, and 120×30 terminals. Enter a number or letter and press Enter to confirm. Component states use yellow for updates, green for up-to-date components, and red for missing components; pending and failed lookups have separate messages.
+The main menu provides the following entries. Enter a number or letter, then press Enter to confirm.
 
-The desktop/session entry is selected by strictly parsing `/etc/droidspaces-desktop.conf`: KDE and KDE mobile show only Anland KDE, GNOME shows only Anland GNOME, Niri, Hyprland, Mango, or Denial show their matching compositor, and Anland Next shows only its session. `none` or an unknown desktop opens the component selector. Installed Anland state is used only as a fallback for old RootFS images that have no config file; if no component can be inferred, the selector is used. Selecting a component opens its version details and update, install, or uninstall actions. Version lookups run concurrently in the background, a dynamic Braille symbol indicates an active lookup, and a lookup that has no valid result after 10 seconds is shown as `timeout` without blocking menu input. Version detection runs when the TUI starts; entering or leaving menus and submitting invalid input do not restart it. After an install or uninstall actually starts, detection refreshes once upon returning to the main menu. Input is visible with backspace support, and Loading uses in-place redraws instead of repeatedly clearing the screen. Uninstalling patched Mesa, KWin, Mutter, or compositor packages restores distribution packages, while Hangover Wine and Wine fonts remove their own content. Chinese environments default to CNB, while other languages default to GitHub; the source can also be changed to automatic probing, GitHub, `gh-proxy.com`, or CNB. When CNB is explicitly selected, the TUI does not query the GitHub API: installers obtain asset names, SHA-256 values, and sizes from the synchronized manifest in the same CNB Release. Older releases with no digest provide a clear notice and retain archive-structure and package-metadata validation.
+| Entry | Actions |
+| --- | --- |
+| `[1] Mesa + VA-API` | Install, update, or remove Mesa; select a previous version; configure OpenGL/Vulkan; manage video drivers. |
+| `[2] Anland` | View desktop component versions and install, update, or remove the matching Anland component. |
+| `[3] Hangover Wine` | Install, update, or remove Hangover Wine. |
+| `[4] Wine fonts` | Install, update, or remove the font bundle. |
+| `F` | Refresh component state and upstream versions. |
+| `C` | Clear the Hangover manifest cache or all downloaded files. |
+| `U` | Check for updates; update the TUI, managed installers, or everything. |
 
-The Mesa page has a `[5] Video codecs` submenu for driver updates/installation, removal, and live monitoring. Standalone updates and removal use `--media-only` and preserve Mesa packages; `[4] Select Mesa version` uses `--mesa-only` and preserves the video driver. The installed video version and driver SHA-256 are recorded separately in `/var/lib/droidspaces-tui/components/video.version`; an externally replaced file makes the version unknown. Restart affected applications after updating or removing the driver.
+The Anland entry follows `/etc/droidspaces-desktop.conf`. A `none` or unknown desktop opens the component selector. Older images without this configuration use installed components to identify the desktop. Removing patched Mesa, KWin, Mutter, or compositor packages restores distribution packages; Hangover Wine and Wine fonts remove their own content.
 
-Live monitoring is provided by `/usr/local/bin/droidspaces-video.sh`, using Bash, awk, jq, and GNU coreutils/findutils, already included in all seven targets. It runs as the current user without automatic elevation or a daemon and reads only accessible `dmd-video-v1` driver sessions. Rows show direction, codec, processing size, output FPS, and hardware status, grouped by application and UID. Green means the driver has reported completed hardware work, yellow means pending or unknown, and red marks errors. Readable mpv, VLC, and OBS processes also appear without driver sessions, but their software codec path is not inferred.
+Component states include missing, up to date, update available, locally newer, unknown version, and installation-record drift. Upstream checks run in the background and show progress or specific errors. Expired cache entries refresh automatically; offline results include their check time. Installing, removing, or changing the download source refreshes the state.
 
-Output FPS uses output-frame deltas and a kernel sampling clock. The first sample shows `--`; a paused session shows 0. It is not presentation FPS. Processing sizes can include hardware alignment, such as 1920×1088, and are not rewritten as source display sizes. Old drivers, other APIs, or process permissions can hide sessions; their state remains unknown. Press `q`, `Esc`, or `Ctrl+C` to return to the video submenu. `--no-color` also applies to the monitor. Standalone usage supports `bash /usr/local/bin/droidspaces-video.sh --once`, `--json`, and `--interval SECONDS`.
+### Download sources and updates
 
-Builds copy the TUI and monitor from this repository. New commits in the package repository do not automatically replace these copies. Deployed RootFS images can use `U` to update after a new `Gold-bug-tui` Release is published.
-
-Press `C` in the main menu to open cache management. The Hangover Release manifest can be removed by itself to recover from a stale manifest after a rolling Release update, or all downloads under `/var/cache/hangover-wine` can be removed. Both actions require confirmation, and cleaning all downloads means the package archive must be downloaded again on the next installation.
-
-Press `U` to open update management. It can check for updates, update only the TUI, update only managed installer scripts, or update everything. The TUI temporarily obtains the one-time installer from the fixed `Gold-bug-tui` tag. GitHub/proxy mode cross-checks the GitHub Release API and the release manifest; CNB mode reads only the synchronized CNB manifest for SHA-256 and size verification, backs up old files before replacement, and removes the temporary installer when finished.
-
-An initial source can also be selected on startup:
+On first use, Chinese environments default to CNB and other languages to GitHub. Sources include automatic probing, GitHub, `gh-proxy.com`, and CNB. Select one at startup with:
 
 ```bash
 droidspaces-tui --source cnb
 droidspaces-tui --source github
 ```
 
+Source preferences are stored in the current user's configuration directory. GitHub/proxy mode cross-checks the GitHub Release API and release manifest; CNB mode uses SHA-256 values and sizes from its synchronized manifest. Older releases without digests show a notice and undergo archive and package-metadata checks.
+
+`U` fetches updates from the `Gold-bug-tui` Release, verifies them, then backs up and replaces files. `C` can clear downloads under `/var/cache/hangover-wine`; the next installation downloads those packages again.
+
+### GPU and video codecs
+
+The GPU menu has overview, OpenGL, and Vulkan pages with paginated driver manifests.
+
+The Mesa page's `[5] Video codecs` submenu installs, updates, removes, and monitors the video driver. Video-only operations use `--media-only`; `[4] Select Mesa version` uses `--mesa-only`. The video version and file digest are recorded in `/var/lib/droidspaces-tui/components/video.version`. Restart affected applications after an update or removal.
+
+Live monitoring reads driver sessions accessible to the current user. Rows are grouped by application and UID and show direction, codec, processing size, output FPS, and hardware status. Green means the driver has confirmed completed hardware work, yellow means pending or unknown, and red marks errors. Readable mpv, VLC, and OBS processes also appear; missing driver telemetry is shown as unknown.
+
+Output FPS measures driver output between samples. The first sample shows `--`; paused sessions show 0. This differs from screen presentation FPS. Processing sizes may include hardware alignment, such as 1920×1088. Older drivers, other APIs, or process permissions may hide sessions. Press `q`, `Esc`, or `Ctrl+C` to return to the menu.
+
+Run the monitor separately with:
+
+```bash
+droidspaces-video.sh --once
+droidspaces-video.sh --json
+droidspaces-video.sh --interval 2
+```
+
+Monitoring uses Bash, awk, jq, and GNU coreutils/findutils, included in the built images. `--no-color` disables colored output.
+
+### Logs and recovery
+
+Installers and GPU configuration share a modification lock. Logs and stage records are stored in `/var/lib/droidspaces-tui/operations/transactions`; non-root pre-download logs use `~/.local/state/droidspaces-tui/logs`.
+
+Failed or interrupted operations restore backed-up configuration. An unfinished TUI file update recovers on the next run. Package transactions may already have completed; restoring configuration cannot undo the entire installation. Use the log to verify or repair package state with the relevant installer.
+
+Print diagnostic status with:
+
+```bash
+droidspaces-tui --status
+droidspaces-tui --json
+```
+
 ## Mesa Installer
 
-`install-mesa.sh` selects the ARM64 Mesa asset for the current distribution from the distribution Release in GitHub/proxy mode; CNB mode reads only `mesa-distribution-manifest` from the matching CNB Release. It then installs the synchronized `msm_drm_drv_video.so`. It supports Debian 13, Ubuntu 24.04/25.10/26.04, Fedora 43/44, and Arch Linux. The video codec driver is installed in each distribution's default libva driver directory: `/usr/lib/aarch64-linux-gnu/dri` on Debian/Ubuntu, `/usr/lib64/dri` on Fedora, and `/usr/lib/dri` on Arch Linux.
+`install-mesa` selects the ARM64 Mesa asset for the current distribution from the distribution Release in GitHub/proxy mode; CNB mode reads only `mesa-distribution-manifest` from the matching CNB Release. It then installs the synchronized `msm_drm_drv_video.so`. It supports Debian 13, Ubuntu 24.04/25.10/26.04, Fedora 43/44, and Arch Linux. The video codec driver is installed in each distribution's default libva driver directory: `/usr/lib/aarch64-linux-gnu/dri` on Debian/Ubuntu, `/usr/lib64/dri` on Fedora, and `/usr/lib/dri` on Arch Linux.
 
 The installer strictly validates Release tags, asset names, and downloaded content. GitHub/proxy mode retains GitHub Release API SHA-256 cross-checks; CNB mode uses only the SHA-256 values and sizes in the CNB distribution manifest, then still verifies the synchronized media-driver `SHA256SUMS`. Downloads can resume, and temporary files are removed on exit.
 
-Run interactively from the repository root:
+Run interactively inside the container:
 
 ```bash
-sudo ./scripts/tui/install-mesa.sh
+sudo install-mesa
 ```
 
 With no option, the script probes all three sources and prompts for a choice. Select a source directly for unattended builds:
 
 ```bash
-sudo ./scripts/tui/install-mesa.sh --1  # GitHub
-sudo ./scripts/tui/install-mesa.sh --2  # gh-proxy.com
-sudo ./scripts/tui/install-mesa.sh --3  # CNB
+sudo install-mesa --1  # GitHub
+sudo install-mesa --2  # gh-proxy.com
+sudo install-mesa --3  # CNB
 ```
 
-The source options are mutually exclusive and apply to both Mesa and video codec driver downloads. `-1`, `-2`, and `-3` are equivalent short options; use `--help` for built-in help. GitHub/proxy mode cross-checks the GitHub Release API; CNB mode reads only the CNB distribution manifest. The installer handles downloads and digest verification.
+The source options are mutually exclusive and apply to both Mesa and video codec driver downloads. `-1`, `-2`, and `-3` are equivalent short options; use `--help` for built-in help.
 
 After installation, persistent package locks are written for each distribution:
 
@@ -113,73 +149,78 @@ Desktop names, target capabilities, and backend compatibility live in `lib/deskt
 3. Map its session command in `start-desktop-session.sh`; `install-desktop.sh` automatically discovers executable profiles for valid slugs.
 4. Add its display label to the `desktop` choice in both workflow entry files.
 
-Desktop translation files are enabled globally by each Dockerfile before packages are installed: Fedora writes `%_install_langs all`, Debian/Ubuntu disable the dpkg locale `path-exclude`, and Arch removes `NoExtract`. Profiles no longer need to handle language files themselves.
+Profiles that require patched Wayland packages must also map to a package family in `lib/anland-build.sh` through `anland_package_family`.
 
-All seven Dockerfiles and the reusable workflow already use the generic profile interface, so an ordinary X11 desktop does not require copied Dockerfiles. Profiles that require patched Wayland packages must also map to a package family in `lib/anland-build.sh` through `anland_package_family`.
+Dockerfiles configure desktop translation files: Fedora writes `%_install_langs all`, Debian/Ubuntu disable the dpkg locale `path-exclude`, and Arch removes `NoExtract`.
 
-All distributions install `etc/pipewire/client.conf.d/90-droidspaces-portal-rt-workaround.conf` into `/etc/pipewire/client.conf.d/` only when KDE or KDE Mobile is selected. Other desktop and command-line images do not install this configuration. It sets `rtportal.enabled = false` in `module.rt.args` to avoid the Realtime portal returning a zero budget when RTKit is unavailable, which makes PipeWire clients set `RLIMIT_RTTIME=0` and receive a kernel `SIGKILL`. Direct realtime scheduling and direct RTKit fallback remain enabled. See [xdg-desktop-portal #2110](https://github.com/flatpak/xdg-desktop-portal/issues/2110) and [#2139](https://github.com/flatpak/xdg-desktop-portal/pull/2139) for the issue and proposed fix. Every KDE and KDE Mobile distribution profile explicitly installs `xdg-desktop-portal` and `xdg-desktop-portal-kde`;
+KDE/KDE Mobile profiles install `xdg-desktop-portal` and `xdg-desktop-portal-kde`, plus `etc/pipewire/client.conf.d/90-droidspaces-portal-rt-workaround.conf` under `/etc/pipewire/client.conf.d/`. This configuration sets `rtportal.enabled = false`. See [xdg-desktop-portal #2110](https://github.com/flatpak/xdg-desktop-portal/issues/2110) and [#2139](https://github.com/flatpak/xdg-desktop-portal/pull/2139) for related issues.
 
 ## Anland KDE Installer
 
-`install-anland-kde.sh` reads `anland-kde-manifest` from the fixed `anland-kde-packages` rolling Release in `Goldzxcbug/droidspaces-package` by default, then installs the matching patched KWin/Xwayland packages for Debian 13, Ubuntu 26.04, Fedora 43/44, or Arch Linux on ARM64.
+`install-anland-kde` reads `anland-kde-manifest` from the fixed `anland-kde-packages` rolling Release in `Goldzxcbug/droidspaces-package` by default, then installs the matching patched KWin/Xwayland packages for Debian 13, Ubuntu 26.04, Fedora 43/44, or Arch Linux on ARM64.
 
 ```bash
-sudo ./scripts/tui/install-anland-kde.sh
+sudo install-anland-kde
 ```
 
-It also accepts `--1`, `--2`, or `--3` for GitHub, `gh-proxy.com`, or `ghproxy.net`; with no option, it probes the sources and prompts. Both the manifest and archive from a mirror are checked against GitHub API digests. Messages follow the system locale, and APT holds, DNF excludes, or Pacman `IgnorePkg` entries prevent upgrades from replacing the installed packages.
+Use `--1`, `--2`, or `--3` for GitHub, `gh-proxy.com`, or CNB; with no option, the installer probes sources and prompts. GitHub/proxy mode uses GitHub API digest checks; CNB mode uses its synchronized manifest. Messages follow the system locale, and APT holds, DNF excludes, or Pacman `IgnorePkg` entries lock the related packages.
 
 To install packages published by a public fork, override only the repository. The fork must provide the fixed `anland-kde-packages` tag:
 
 ```bash
 sudo ANLAND_RELEASE_REPOSITORY=owner/repository \
-  ./scripts/tui/install-anland-kde.sh --1
+  install-anland-kde --1
 ```
 
 The Anland host module, app, SELinux policy, bind mount, and Droidspaces permissions must still be configured as described in the [Wayland and Anland setup guide](../docs/en/desktop-and-anland.md#anland-wayland-host-setup).
 
 ## Anland GNOME Installer
 
-`install-anland-gnome.sh` reads `anland-gnome-manifest` from the fixed `anland-gnome-packages` rolling Release and installs patched Mutter runtime packages for Debian 13, Ubuntu 26.04, or Arch Linux ARM64. On Arch it installs only the `mutter` runtime package and uses pacman `IgnorePkg`; Debian/Ubuntu use APT holds. Packages for all three targets are published by `droidspaces-package`; RootFS builds and later updates fetch the matching archive through the Release manifest. Its source selection, mirror digest checks, and arguments match the KDE installer.
+`install-anland-gnome` reads the matching archive from `anland-gnome-manifest` in the fixed `anland-gnome-packages` rolling Release. It installs patched Mutter runtime packages for Debian 13, Ubuntu 26.04, Fedora 43/44, or Arch Linux ARM64 and locks them with APT holds, DNF excludes, or Pacman `IgnorePkg`. Download sources and arguments match the KDE installer.
 
 ```bash
-sudo ./scripts/tui/install-anland-gnome.sh
+sudo install-anland-gnome
 ```
 
-Override the GNOME repository variable when using packages from a public fork:
+Override the repository variable when using packages from a public fork:
 
 ```bash
 sudo ANLAND_RELEASE_REPOSITORY=owner/repository \
-  ./scripts/tui/install-anland-gnome.sh --1
+  install-anland-gnome --1
 ```
 
 ## Anland Next Installer
 
-`install-anland-next.sh` reads `anland-session-manifest` from the fixed `anland-session-packages` rolling Release and installs the `anland-session` package for Debian 13, Ubuntu 26.04, Fedora 43/44, or Arch Linux on ARM64. Its source selection, mirror digest checks, and arguments match the KDE installer.
+`install-anland-next` reads `anland-session-manifest` from the fixed `anland-session-packages` rolling Release and installs the `anland-session` package for Debian 13, Ubuntu 26.04, Fedora 43/44, or Arch Linux on ARM64. Its source selection, mirror digest checks, and arguments match the KDE installer.
 
 ```bash
-sudo ./scripts/tui/install-anland-next.sh
+sudo install-anland-next
 ```
 
-The package carries three prebuilt components: `anland-miniwm`, a Xwayland patched for kgsl/turnip glamor, and a bubblewrap patched for the mountinfo index. The latter two live in `/usr/lib/anland/`, which the session puts first on `PATH`; the distribution binaries are never replaced, so unlike KDE/GNOME **no package locking is needed** — this package overwrites nothing.
+The package contains `anland-miniwm`, patched Xwayland, and patched bubblewrap. The latter two live in `/usr/lib/anland/`, which the session adds to `PATH`.
 
-The session itself is the packaged `/usr/bin/anland-session` (session D-Bus + wayland link + rootless Xwayland + mini-wm) together with `/usr/lib/systemd/user/anland-session.service`, and nothing is written into a user's home directory.
+The session entry is `/usr/bin/anland-session`, used with `/usr/lib/systemd/user/anland-session.service`.
 
-The Anland Next profile defaults Qt 6 applications to native Wayland and explicitly installs its platform plugin; an interactive user shell imports `~/.anlandx-env` while the session is running. Kate launchers consistently use `kate -b`, avoiding its no-window exit in a minimal session. Legacy X11/XCB applications remain compatible through the packaged Xwayland, without injecting additional Qt/X11 scaling variables.
+The Anland Next profile defaults Qt 6 applications to native Wayland and installs the platform plugin. Interactive user shells import `~/.anlandx-env` while the session is running.
 
 To use packages from a public fork, override the repository variable:
 
 ```bash
 sudo ANLAND_NEXT_RELEASE_REPOSITORY=owner/repository \
-  ./scripts/tui/install-anland-next.sh --1
+  install-anland-next --1
 ```
 
-## Anland Niri Installer
+## Anland Niri, Hyprland, Mango, and Denial Installers
 
 Niri, Hyprland, Mango, and Denial installers fetch their compositor and patched `xorg-xwayland` packages from fixed rolling Releases on Debian 13, Ubuntu 26, Fedora 43/44, and Arch ARM64. Each desktop has its own profile at `scripts/desktops/<slug>.sh`; the profile provides a terminal, XDG portal, audio, and fonts, and Niri on Arch also includes common desktop utilities. These compositors share patched Xwayland, and their installers prevent conflicting replacement while preserving packages used by other installed components.
 
+Choose the command for your desktop:
+
 ```bash
-sudo ./scripts/tui/install-anland-niri.sh
+sudo install-anland-niri
+sudo install-anland-hyprland
+sudo install-anland-mango
+sudo install-anland-denial
 ```
 
 ## USB Manager Installer
@@ -192,7 +233,7 @@ sudo ./scripts/install-usb-manager.sh --user "$USER"
 
 `--user USER` selects the user that receives USB management permissions and desktop launchers. When omitted, the installer tries `SUDO_USER`, the logged-in user, and then the first regular user. Development and offline tests can use a local Droidspaces-USB-Manager checkout through `--source DIR`; run `--help` for all options.
 
-On a regular Arch system, the installer continues to install `systemd` and the remaining dependencies normally. When `/etc/droidspaces-systemd257` exists, a repeated installation preserves Pacman's `IgnorePkg` lock and no longer names `systemd` as an explicit install target; the PyQt5, ADB, NTFS, exFAT, and other USB Manager dependencies are still installed as needed.
+When `/etc/droidspaces-systemd257` exists on Arch, the installer preserves the systemd Pacman lock and installs the remaining dependencies.
 
 Hardware access must be enabled when importing the RootFS into Droidspaces, or `/sys/bus/usb` and `/sys/bus/scsi` will not be visible inside the container.
 
@@ -223,19 +264,42 @@ It installs `zstd` and `linux-firmware`, decompresses `.zst` files under `/lib/f
 - `binfmt/qemu-binfmt-register.sh` and its service verify kernel `binfmt_misc` support and mount it when needed; unsupported kernels are skipped safely. QEMU interpreters are still required for actual cross-architecture execution.
 - `bashrc.sh` is shell configuration appended to a user environment, not a standalone installer.
 
-## Development Checks
+## TUI Downloads and Maintenance
 
-After changing a shell script, run at least a syntax check. Use ShellCheck when it is installed:
+TUI source is maintained in [`droidspaces-package`](https://github.com/Goldzxcbug/droidspaces-package). RootFS builds fetch the current publication from that repository's `Gold-bug-tui` rolling Release.
+
+Download it from this repository's root:
 
 ```bash
-bash -n scripts/tui/install-mesa.sh
-bash -n scripts/tui/droidspaces-tui.sh
-bash -n scripts/tui/install-anland-kde.sh
-bash -n scripts/tui/install-anland-gnome.sh
-bash -n scripts/tui/install-anland-next.sh
-bash -n scripts/install-usb-manager.sh
-shellcheck scripts/tui/install-mesa.sh
-shellcheck scripts/tui/droidspaces-tui.sh
+bash scripts/sync-tui.sh --output .build/tui
 ```
 
-Changes to package installation or lock handling should also be tested in APT, DNF, and Pacman containers. Run each installer twice to verify idempotency.
+Use the CNB mirror with:
+
+```bash
+bash scripts/sync-tui.sh --output .build/tui --source cnb
+```
+
+The downloader uses Bash, curl, GNU tar/coreutils, gzip, and `flock` from util-linux. It verifies the release manifest and the SHA-256 and size of `Gold-bug-tui.tar.gz`, checks archive paths, file types, duplicate members, and expanded size, and rejects links and traversal. After extraction, `Gold-bug-tui-files` supplies the digest, size, and Shell syntax checks for each entry point and `lib/*.sh`. Limits are 32 MiB for the compressed archive, 64 MiB for all expanded files, 8 MiB per script, and 128 archive members. Changed release content or a failed check stops the build and preserves the previous download directory. Files are stored in `.build/tui` and are not committed to the repository.
+
+The native/QEMU entry points download files into separate temporary directories, pass them to Docker, and clean up when finished. GitHub is the default; set `DROIDSPACES_TUI_SOURCE=cnb` to use CNB. Each build checks the current release; building the same RootFS commit at different times may include different TUI versions. Images save the release manifest `Gold-bug-tui-manifest` and file manifest `Gold-bug-tui-files` under `/usr/local/share/droidspaces-tui/`. Offline `--check` also verifies matching revisions, shared libraries, and entry-point digests.
+
+Verify files that have already been downloaded:
+
+```bash
+bash scripts/sync-tui.sh --output .build/tui --check
+```
+
+## Development Checks
+
+Run syntax and static checks from the repository root:
+
+```bash
+bash -n scripts/sync-tui.sh
+bash -n scripts/install-rootfs-tools.sh
+bash -n scripts/install-usb-manager.sh
+shellcheck scripts/sync-tui.sh
+shellcheck scripts/install-rootfs-tools.sh
+```
+
+TUI and Anland installers are maintained directly in the package repository, with syntax and static checks. Test package installation and lock changes in APT, DNF, and Pacman containers, and repeat installation to check idempotency.

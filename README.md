@@ -14,7 +14,8 @@
 
 - 七种发行版构建目标，支持 X11 与 Anland Wayland（依桌面和发行版而定）。
 - 可选中文环境、Fcitx5、Snapdragon GPU 支持、音频转发、开发工具和 Docker。
-- RootFS 自动发布到 GitHub Releases；容器内提供桌面会话、USB 管理与维护工具。
+- RootFS 自动发布到 GitHub Releases；容器内提供桌面会话、USB 管理和 `dstui` 维护菜单。
+- TUI 与维护安装器在构建时从 `Gold-bug-tui` Release 获取并校验。
 
 ## 文档
 
@@ -36,6 +37,7 @@
 - [droidspaces-media-decode](https://github.com/Re-s/droidspaces-media-decode)：提供 Android MediaCodec 容器硬件解码支持。
 - [Anland](https://github.com/superturtlee/anland)：提供 Wayland 显示后端及相关工作。
 - [Droidspaces USB Manager](https://github.com/Yizhou147/Droidspaces-USB-Manager)：提供 USB 存储和 ADB 设备管理工具。
+
 ---
 
 [所有桌面截图](docs/zh/README.md#桌面截图) · [English README](README_english.md)

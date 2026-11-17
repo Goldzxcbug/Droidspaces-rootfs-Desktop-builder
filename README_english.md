@@ -14,7 +14,8 @@ Subscribe to the rolling desktop feed in Droidspaces: [Chinese RootFS (GitHub)](
 
 - Seven distribution targets, with X11 and Anland Wayland support depending on the selected profile and distribution.
 - Optional Chinese locale, Fcitx5, Snapdragon GPU support, audio forwarding, development tools, and Docker.
-- Automatic GitHub Release publishing, desktop session startup, USB management, and in-container maintenance tools.
+- Automatic GitHub Release publishing, desktop session startup, USB management, and the `dstui` maintenance menu.
+- TUI and maintenance installers fetched and verified from the `Gold-bug-tui` Release during the build.
 
 ## Documentation
 
@@ -36,6 +37,7 @@ Subscribe to the rolling desktop feed in Droidspaces: [Chinese RootFS (GitHub)](
 - [droidspaces-media-decode](https://github.com/Re-s/droidspaces-media-decode): Android MediaCodec hardware decoding for containers.
 - [Anland](https://github.com/superturtlee/anland): Wayland display backend and related work.
 - [Droidspaces USB Manager](https://github.com/Yizhou147/Droidspaces-USB-Manager): USB storage and ADB device management.
+
 ---
 
 [All desktop screenshots](docs/en/README.md#screenshots) · [中文 README](README.md)

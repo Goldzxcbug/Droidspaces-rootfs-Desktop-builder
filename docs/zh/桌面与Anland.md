@@ -32,8 +32,6 @@ startplasma-x11
 
 Anland Wayland 支持 Debian 13、Ubuntu 26、Fedora 43/44 和 Arch。Arch KDE 仅使用 Anland Wayland；KDE 使用 patched KWin/Xwayland，GNOME 使用 patched Mutter。GNOME 在这些发行版上安装完整桌面和基础应用。Niri、Hyprland、Mango、Denial 提供轻量会话、终端、XDG portal、音频和字体，用户可自行添加桌面应用。它们的 ARM64 包由 [`droidspaces-package`](https://github.com/Goldzxcbug/droidspaces-package) 发布，RootFS 构建时从对应 Release 安装。
 
-轻量 compositor 各自使用独立的 `desktops/<slug>.sh` profile；profile 会将会话与 Anland/Mesa 环境写入 `/etc/environment`。统一桌面启动入口直接运行包提供的 compositor 命令，不使用 `--session`。
-
 在 Android 设备上完成以下准备：
 
 1. 从 [Anland Releases](https://github.com/superturtlee/anland/releases) 下载并安装设备对应的 `virtual-drm-daemon.zip`，按该项目说明刷入并重启设备。
@@ -51,18 +49,16 @@ Anland Wayland 支持 Debian 13、Ubuntu 26、Fedora 43/44 和 Arch。Arch KDE �
 
 ### 安装或更新 Anland 桌面组件
 
-构建时会自动获取匹配包。若要在已运行的 ARM64 RootFS 中单独安装，可从仓库根目录执行：
+构建时会自动获取匹配包。若要在已运行的 ARM64 RootFS 中单独安装，可在容器内执行：
 
 ```bash
-sudo ./scripts/tui/install-anland-kde.sh
+sudo install-anland-kde
 ```
 
 GNOME 安装器可在 Debian 13、Ubuntu 26、Fedora 43/44 与 Arch Linux ARM 上使用：
 
 ```bash
-sudo ./scripts/tui/install-anland-gnome.sh
+sudo install-anland-gnome
 ```
-
-GNOME 安装器已支持 Debian、Ubuntu、Fedora 和 Arch 的包格式，并从 `anland-gnome-packages` Release 清单读取匹配目标。
 
 安装器选项、下载源和校验方式见[脚本说明](../../scripts/README.md#anland-kde-安装器)。

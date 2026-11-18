@@ -56,9 +56,9 @@ rm -rf \
 
 echo "[nosnap] 正在阻止 APT 重新安装 snapd"
 # 使用负优先级阻止后续依赖解析重新安装 snapd 及桌面集成组件。
-# Ubuntu 的 chromium-browser 是用于拉取 Chromium Snap 的过渡包，也一并屏蔽。
+# 屏蔽浏览器和邮件客户端的 Snap 过渡包，并优先选择 Mozilla Team 的 deb。
 mkdir -p /etc/apt/preferences.d
-cat > /etc/apt/preferences.d/nosnap.pref <<'EOF'
+if ! cat > /etc/apt/preferences.d/nosnap.pref <<'EOF'
 Package: snapd snapd-desktop-integration gnome-software-plugin-snap plasma-discover-backend-snap
 Pin: release a=*
 Pin-Priority: -10
@@ -66,21 +66,25 @@ Pin-Priority: -10
 Package: chromium-browser
 Pin: release o=Ubuntu
 Pin-Priority: -10
-EOF
 
-# 确认 pin 配置成功落盘；缺少它会导致后续 apt 操作重新引入 Snap。
-if [ ! -f /etc/apt/preferences.d/nosnap.pref ]; then
+Package: firefox:any firefox-*:any thunderbird:any thunderbird-*:any
+Pin: version /^([0-9]+:)?1snap[0-9]/
+Pin-Priority: -10
+
+Package: firefox:any firefox-*:any thunderbird:any thunderbird-*:any
+Pin: release o=LP-PPA-mozillateam
+Pin-Priority: 1001
+EOF
+then
   echo "[nosnap] 写入 APT 锁定配置失败"
   exit 1
 fi
 
-echo "[nosnap] 正在添加 ppa:xtradeb/apps"
-# XtraDeb 提供部分 Ubuntu 软件的传统 deb 包，可替代只提供 Snap/过渡包的来源。
 # 优先使用 UBUNTU_CODENAME，并兼容只提供 VERSION_CODENAME 的系统。
-xtradeb_codename=""
+ubuntu_codename=""
 if [ -r /etc/os-release ]; then
   . /etc/os-release
-  xtradeb_codename="${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"
+  ubuntu_codename="${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"
 fi
 
 # 下载文本并输出到标准输出，供 API 查询和仓库可用性探测使用。
@@ -94,74 +98,81 @@ download_stdout() {
   fi
 }
 
-# 下载内容到指定文件；优先使用 curl，在精简环境中回退到 wget。
-download_file() {
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$1" > "$2"
-  elif command -v wget >/dev/null 2>&1; then
-    wget -qO "$2" "$1"
-  else
-    return 1
-  fi
-}
+# 从已发布的候选仓库中选取一个代号，并为该 PPA 配置独立的签名密钥。
+add_ppa() {
+  local ppa="$1"
+  shift
+  local url="https://ppa.launchpadcontent.net/${ppa}/ubuntu"
+  local name="${ppa/\//-}"
+  local candidate suite="" key keyring key_tmp source_tmp
 
-# 通过读取仓库 Release 文件判断指定 Ubuntu 代号是否已被 PPA 发布。
-release_exists() {
-  download_stdout "$1" >/dev/null 2>&1
-}
-
-if [ -n "$xtradeb_codename" ]; then
-  xtradeb_key=""
-  xtradeb_source_codename=""
-  xtradeb_api="https://api.launchpad.net/1.0/~xtradeb/+archive/ubuntu/apps"
-  xtradeb_candidates="$xtradeb_codename"
-
-  # 新 Ubuntu 版本刚发布时 PPA 可能尚未建立对应仓库，此处按由新到旧的
-  # 顺序回退到兼容版本，避免整个 RootFS 构建因此失败。
-  case "$xtradeb_codename" in
-    resolute)
-      xtradeb_candidates="$xtradeb_codename questing plucky noble"
-      ;;
-    questing)
-      xtradeb_candidates="$xtradeb_codename plucky noble"
-      ;;
-    plucky|oracular)
-      xtradeb_candidates="$xtradeb_codename noble"
-      ;;
-  esac
-
-  # 从 Launchpad API 动态获取签名密钥指纹，避免在脚本中硬编码可能轮换的密钥。
-  xtradeb_key="$(download_stdout "$xtradeb_api" 2>/dev/null | awk -F'"' '/signing_key_fingerprint/ { print $4; exit }')"
-
-  # 选择候选列表中第一个实际存在 Release 元数据的仓库代号。
-  for candidate in $xtradeb_candidates; do
-    xtradeb_release="https://ppa.launchpadcontent.net/xtradeb/apps/ubuntu/dists/${candidate}/Release"
-    if release_exists "$xtradeb_release"; then
-      xtradeb_source_codename="$candidate"
+  echo "[nosnap] 正在添加 ppa:$ppa"
+  for candidate in "$@"; do
+    if download_stdout "$url/dists/$candidate/Release" >/dev/null 2>&1; then
+      suite="$candidate"
       break
     fi
   done
-
-  if [ -n "$xtradeb_source_codename" ] && [ -n "$xtradeb_key" ]; then
-    mkdir -p /etc/apt/keyrings /etc/apt/sources.list.d
-    # 密钥下载失败时立即删除空文件，防止 apt 将其误认为有效 keyring。
-    download_file "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${xtradeb_key}" /etc/apt/keyrings/xtradeb-apps.asc 2>/dev/null || rm -f /etc/apt/keyrings/xtradeb-apps.asc
-
-    if [ -s /etc/apt/keyrings/xtradeb-apps.asc ]; then
-      chmod 0644 /etc/apt/keyrings/xtradeb-apps.asc
-      # signed-by 将该仓库的信任范围限制在专用密钥文件内。
-      echo "deb [signed-by=/etc/apt/keyrings/xtradeb-apps.asc] https://ppa.launchpadcontent.net/xtradeb/apps/ubuntu ${xtradeb_source_codename} main" > /etc/apt/sources.list.d/xtradeb-apps.list
-      if [ "$xtradeb_source_codename" != "$xtradeb_codename" ]; then
-        echo "[nosnap] ppa:xtradeb/apps 未发布 ${xtradeb_codename}，改用 ${xtradeb_source_codename}"
-      fi
-    else
-      echo "[nosnap] 获取 XtraDeb 签名密钥失败，跳过 ppa:xtradeb/apps"
-    fi
-  else
-    echo "[nosnap] ppa:xtradeb/apps 不支持 ${xtradeb_codename} 或网络不可用，已跳过"
+  if [ -z "$suite" ]; then
+    echo "[nosnap] ppa:$ppa 没有可用的 ${ubuntu_codename} 仓库，已跳过"
+    return 1
   fi
+
+  # Launchpad API 会把多个 JSON 字段放在同一行，按字段名提取完整指纹。
+  key="$(download_stdout "https://api.launchpad.net/1.0/~${ppa%/*}/+archive/ubuntu/${ppa##*/}" 2>/dev/null |
+    sed -nE 's/.*"signing_key_fingerprint"[[:space:]]*:[[:space:]]*"([[:xdigit:]]{40})".*/\1/p')"
+  if [ -z "$key" ]; then
+    echo "[nosnap] 获取 ppa:$ppa 签名密钥指纹失败，已跳过"
+    return 1
+  fi
+
+  mkdir -p /etc/apt/keyrings /etc/apt/sources.list.d || return 1
+  keyring="/etc/apt/keyrings/$name.asc"
+  key_tmp="$(mktemp "/etc/apt/keyrings/.$name.XXXXXX")" || return 1
+  if ! download_stdout "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x$key" > "$key_tmp" ||
+     ! grep -Fxq -- '-----BEGIN PGP PUBLIC KEY BLOCK-----' "$key_tmp" ||
+     ! grep -Fxq -- '-----END PGP PUBLIC KEY BLOCK-----' "$key_tmp" ||
+     ! chmod 0644 "$key_tmp" ||
+     ! mv -fT "$key_tmp" "$keyring"; then
+    rm -f "$key_tmp"
+    echo "[nosnap] 配置 ppa:$ppa 签名密钥失败，已跳过"
+    return 1
+  fi
+
+  source_tmp="$(mktemp "/etc/apt/sources.list.d/.$name.XXXXXX")" || return 1
+  if ! printf 'deb [signed-by=%s] %s %s main\n' "$keyring" "$url" "$suite" > "$source_tmp" ||
+     ! chmod 0644 "$source_tmp" ||
+     ! mv -fT "$source_tmp" "/etc/apt/sources.list.d/$name.list"; then
+    rm -f "$source_tmp"
+    echo "[nosnap] 写入 ppa:$ppa 软件源失败，已跳过"
+    return 1
+  fi
+
+  if [ "$suite" != "$ubuntu_codename" ]; then
+    echo "[nosnap] ppa:$ppa 未发布 ${ubuntu_codename}，改用 ${suite}"
+  fi
+}
+
+if [ -n "$ubuntu_codename" ]; then
+  # 保留 XtraDeb 在新版本尚未发布仓库时的候选顺序。
+  xtradeb_candidates=("$ubuntu_codename")
+  case "$ubuntu_codename" in
+    resolute)
+      xtradeb_candidates+=(questing plucky noble)
+      ;;
+    questing)
+      xtradeb_candidates+=(plucky noble)
+      ;;
+    plucky|oracular)
+      xtradeb_candidates+=(noble)
+      ;;
+  esac
+
+  add_ppa xtradeb/apps "${xtradeb_candidates[@]}" || true
+  # Firefox 和 Thunderbird 使用为目标 Ubuntu 版本构建的软件包。
+  add_ppa mozillateam/ppa "$ubuntu_codename" || true
 else
-  echo "[nosnap] 无法检测 Ubuntu 代号，跳过 ppa:xtradeb/apps"
+  echo "[nosnap] 无法检测 Ubuntu 代号，跳过 PPA 配置"
 fi
 
 echo "[nosnap] 处理完成"

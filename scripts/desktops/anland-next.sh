@@ -71,7 +71,7 @@ install_apt() {
 
 install_fedora() {
     case "$VERSION_ID" in
-        43|44) ;;
+        43|44|45) ;;
         *) echo "Anland Next 不支持 Fedora $VERSION_ID" >&2; return 1 ;;
     esac
 

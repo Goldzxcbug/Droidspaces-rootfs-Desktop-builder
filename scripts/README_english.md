@@ -191,7 +191,7 @@ sudo ANLAND_RELEASE_REPOSITORY=owner/repository \
 
 ## Anland Next Installer
 
-`install-anland-next` reads `anland-session-manifest` from the fixed `anland-session-packages` rolling Release and installs the `anland-session` package for Debian 13, Ubuntu 26.04, Fedora 43/44, or Arch Linux on ARM64. Its source selection, mirror digest checks, and arguments match the KDE installer.
+`install-anland-next` reads `anland-session-manifest` from the fixed `anland-session-packages` rolling Release and installs the `anland-session` package for Debian 13, Ubuntu 26.04, Fedora 43/44/45, or Arch Linux on ARM64. Its source selection, mirror digest checks, and arguments match the KDE installer.
 
 ```bash
 sudo install-anland-next

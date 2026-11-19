@@ -14,10 +14,10 @@ Choose the target, desktop, display backend, and optional features on the GitHub
 | `Ubuntu-26` | Ubuntu 26.04 | `none`, `KDE`, `KDE mobile`, `GNOME`, `Anland Next`, `Niri`, `Hyprland`, `Mango`, `Denial` | Yes |
 | `Fedora-43` | Fedora 43 | `none`, `KDE`, `KDE mobile`, `GNOME`, `Anland Next`, `Niri`, `Hyprland`, `Mango`, `Denial` | Yes |
 | `Fedora-44` | Fedora 44 | `none`, `KDE`, `KDE mobile`, `GNOME`, `Anland Next`, `Niri`, `Hyprland`, `Mango`, `Denial` | Yes |
-| `Fedora-45` | Fedora 45 | `none`, `KDE`, `KDE mobile`, `GNOME`, `Niri`, `Hyprland`, `Mango`, `Denial` | Yes (KDE uses Anland Wayland only) |
+| `Fedora-45` | Fedora 45 | `none`, `KDE`, `KDE mobile`, `GNOME`, `Anland Next`, `Niri`, `Hyprland`, `Mango`, `Denial` | Yes (KDE uses Anland Wayland only) |
 | `Arch` | Arch Linux ARM | `none`, `KDE`, `KDE mobile`, `GNOME`, `Anland Next`, `Niri`, `Hyprland`, `Mango`, `Denial` | Yes (KDE uses Anland Wayland only) |
 
-`all` filters targets according to desktop/backend support. `all-wayland` builds Debian 13, Ubuntu 26, Fedora 43/44/45, and Arch for KDE/KDE Mobile, GNOME, Niri, Hyprland, Mango, and Denial. Anland Next covers Debian 13, Ubuntu 26, Fedora 43/44, and Arch. KDE on Fedora 45 and Arch, GNOME, KDE Mobile, Anland Next, Niri, Hyprland, Mango, and Denial force `anland-wayland`.
+`all` filters targets according to desktop/backend support. `all-wayland` builds Debian 13, Ubuntu 26, Fedora 43/44/45, and Arch for KDE/KDE Mobile, GNOME, Anland Next, Niri, Hyprland, Mango, and Denial. KDE on Fedora 45 and Arch, GNOME, KDE Mobile, Anland Next, Niri, Hyprland, Mango, and Denial force `anland-wayland`.
 
 | Desktop | Description |
 | --- | --- |

@@ -150,21 +150,21 @@ jobs:
           cat > "$notes_file" <<'EOF'
           ## English
 
-          Rolling ARM64 RootFS collection for Droidspaces, covering 40 distribution and desktop combinations:
-          - Distributions: Debian 13, Ubuntu 26.04, Fedora 43, Fedora 44, and Arch Linux.
+          Rolling ARM64 RootFS collection for Droidspaces, covering 48 distribution and desktop combinations:
+          - Distributions: Debian 13, Ubuntu 26.04, Fedora 43, Fedora 44, Fedora 45, and Arch Linux.
           - Anland Wayland desktops: KDE Plasma, KDE Plasma Mobile, GNOME, Anland Next, Niri, Hyprland, Mango, and Denial.
 
-          Each combination is available in Chinese and English, for 80 `.tar.xz` archives in total. Use `rootfs_en.json` or `rootfs_zh.json` as the subscription manifest in Droidspaces RootFS management. The manifests include version, file size, SHA-256 checksum, and download URL for each image.
+          Each combination is available in Chinese and English, for 96 `.tar.xz` archives in total. Use `rootfs_en.json` or `rootfs_zh.json` as the subscription manifest in Droidspaces RootFS management. The manifests include version, file size, SHA-256 checksum, and download URL for each image.
 
           The images are built for ARM64 and include Droidspaces desktop auto-start and Qualcomm Adreno/Mesa support. This rolling release is refreshed by the scheduled weekly build.
 
           ## 中文
 
-          面向 Droidspaces 的 ARM64 滚动 RootFS 集合，覆盖 40 种发行版与桌面环境组合：
-          - 发行版：Debian 13、Ubuntu 26.04、Fedora 43、Fedora 44 和 Arch Linux。
+          面向 Droidspaces 的 ARM64 滚动 RootFS 集合，覆盖 48 种发行版与桌面环境组合：
+          - 发行版：Debian 13、Ubuntu 26.04、Fedora 43、Fedora 44、Fedora 45 和 Arch Linux。
           - Anland Wayland 桌面：KDE Plasma、KDE Plasma Mobile、GNOME、Anland Next、Niri、Hyprland、Mango 和 Denial。
 
-          每种组合均提供中文和英文版本，共 80 个 `.tar.xz` 压缩包。在 Droidspaces RootFS 管理中添加 `rootfs_zh.json` 或 `rootfs_en.json` 订阅清单即可。清单包含每个镜像的版本、文件大小、SHA-256 校验值和下载地址。
+          每种组合均提供中文和英文版本，共 96 个 `.tar.xz` 压缩包。在 Droidspaces RootFS 管理中添加 `rootfs_zh.json` 或 `rootfs_en.json` 订阅清单即可。清单包含每个镜像的版本、文件大小、SHA-256 校验值和下载地址。
 
           镜像面向 ARM64 构建，包含 Droidspaces 桌面自动启动配置和高通 Adreno/Mesa 支持。本滚动 Release 由每周定时构建更新。
           EOF
@@ -175,10 +175,10 @@ jobs:
               "- Build time (UTC) / 构建时间（UTC）: $BUILD_TIME" \
               "- Release tag / 滚动标签: $RELEASE_TAG" \
               '- Architecture / 架构: ARM64' \
-              '- Archives / 镜像数量: 80 (40 Chinese + 40 English) / 80 个（中文 40 个 + 英文 40 个）'
+              '- Archives / 镜像数量: 96 (48 Chinese + 48 English) / 96 个（中文 48 个 + 英文 48 个）'
             printf '\n## Direct download index / 全部 RootFS 地址索引\n\n'
             printf '%s\n' \
-              "- [Complete index: rootfs.json](https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/rootfs.json) — all 80 Chinese and English RootFS download addresses." \
+              "- [Complete index: rootfs.json](https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/rootfs.json) — all 96 Chinese and English RootFS download addresses." \
               "- [English subscription index: rootfs_en.json](https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/rootfs_en.json)" \
               "- [Chinese subscription index: rootfs_zh.json](https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/rootfs_zh.json)"
           } >> "$notes_file"
@@ -218,7 +218,7 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t archives < <(find release-assets -maxdepth 1 -type f -name '*.tar.xz' -print | sort)
-          [ "${#archives[@]}" -eq 80 ]
+          [ "${#archives[@]}" -eq 96 ]
           gh release upload "$RELEASE_TAG" "${archives[@]}" --repo "$GITHUB_REPOSITORY" --clobber
           gh release upload "$RELEASE_TAG" \
             release-assets/rootfs.json \

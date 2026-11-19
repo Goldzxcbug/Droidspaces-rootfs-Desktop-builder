@@ -200,6 +200,11 @@ detect_target() {
       PACKAGE_MANAGER="dnf"
       ARCHIVE_NAME="systemd257-fedora44-arm64.tar.gz"
       ;;
+    fedora:45*)
+      TARGET="fedora45"
+      PACKAGE_MANAGER="dnf"
+      ARCHIVE_NAME="systemd257-fedora45-arm64.tar.gz"
+      ;;
     arch:|archarm:|archlinux:)
       TARGET="arch"
       PACKAGE_MANAGER="pacman"
@@ -1025,7 +1030,7 @@ main() {
       log "当前发行版已经运行 systemd 257，不需要预构建包族"
       return 0
     fi
-    die "当前发行版没有预构建 257 包族；仅支持 Ubuntu 26.04、Fedora 43/44 和 Arch Linux ARM"
+    die "当前发行版没有预构建 257 包族；仅支持 Ubuntu 26.04、Fedora 43/44/45 和 Arch Linux ARM"
   fi
 
   verify_target_tools_and_architecture

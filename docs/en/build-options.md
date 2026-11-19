@@ -14,18 +14,19 @@ Choose the target, desktop, display backend, and optional features on the GitHub
 | `Ubuntu-26` | Ubuntu 26.04 | `none`, `KDE`, `KDE mobile`, `GNOME`, `Anland Next`, `Niri`, `Hyprland`, `Mango`, `Denial` | Yes |
 | `Fedora-43` | Fedora 43 | `none`, `KDE`, `KDE mobile`, `GNOME`, `Anland Next`, `Niri`, `Hyprland`, `Mango`, `Denial` | Yes |
 | `Fedora-44` | Fedora 44 | `none`, `KDE`, `KDE mobile`, `GNOME`, `Anland Next`, `Niri`, `Hyprland`, `Mango`, `Denial` | Yes |
+| `Fedora-45` | Fedora 45 | `none`, `KDE`, `KDE mobile`, `GNOME`, `Anland Next`, `Niri`, `Hyprland`, `Mango`, `Denial` | Yes (KDE uses Anland Wayland only) |
 | `Arch` | Arch Linux ARM | `none`, `KDE`, `KDE mobile`, `GNOME`, `Anland Next`, `Niri`, `Hyprland`, `Mango`, `Denial` | Yes (KDE uses Anland Wayland only) |
 
-`all` filters targets according to desktop/backend support. `all-wayland` builds Debian 13, Ubuntu 26, Fedora 43/44, and Arch for KDE/KDE Mobile, GNOME, Niri, Hyprland, Mango, and Denial. Arch KDE, GNOME, KDE Mobile, Anland Next, Niri, Hyprland, Mango, and Denial force `anland-wayland`.
+`all` filters targets according to desktop/backend support. `all-wayland` builds Debian 13, Ubuntu 26, Fedora 43/44/45, and Arch for KDE/KDE Mobile, GNOME, Anland Next, Niri, Hyprland, Mango, and Denial. KDE on Fedora 45 and Arch, GNOME, KDE Mobile, Anland Next, Niri, Hyprland, Mango, and Denial force `anland-wayland`.
 
 | Desktop | Description |
 | --- | --- |
 | `none` | Command-line environment. |
-| `KDE` | KDE Plasma; Arch supports Anland Wayland only, while other supported targets may use X11 or Anland Wayland. |
+| `KDE` | KDE Plasma; Fedora 45 and Arch support Anland Wayland only, while other supported targets may use X11 or Anland Wayland. |
 | `KDE mobile` | Touch-first Plasma Mobile; requires Anland Wayland. |
-| `GNOME` | A full Anland Wayland desktop on Debian 13, Ubuntu 26, Fedora 43/44, and Arch Linux ARM, with a terminal, file manager, settings, system monitor, keyring, portal, and common document/media apps. |
+| `GNOME` | A full Anland Wayland desktop on Debian 13, Ubuntu 26, Fedora 43/44/45, and Arch Linux ARM, with a terminal, file manager, settings, system monitor, keyring, portal, and common document/media apps. |
 | `Anland Next` | An Anland session with rootless Xwayland and mini-wm, without a full desktop; Wayland only. |
-| `Niri`, `Hyprland`, `Mango`, `Denial` | Anland Wayland compositors on Debian 13, Ubuntu 26, Fedora 43/44, and Arch Linux ARM. They include a basic terminal, XDG portal, audio, and fonts, without a full desktop application set. |
+| `Niri`, `Hyprland`, `Mango`, `Denial` | Anland Wayland compositors on Debian 13, Ubuntu 26, Fedora 43/44/45, and Arch Linux ARM. They include a basic terminal, XDG portal, audio, and fonts, without a full desktop application set. |
 
 ## Workflow inputs
 
@@ -36,7 +37,7 @@ Choose the target, desktop, display backend, and optional features on the GitHub
 | `desktop` | `none`, `KDE`, `KDE mobile`, `GNOME`, `Anland Next`, `Niri`, `Hyprland`, `Mango`, `Denial`; default `KDE` | Selects the primary desktop, i.e. the one that autostarts; `none` is command-line only. |
 | `extra_desktops` | Comma-separated desktop names, e.g. `Niri,Hyprland`; empty by default | Additional desktop profiles to build alongside the primary one; leave empty to build only the primary desktop. `none` cannot be combined with other desktops, and the option is ignored for the `all-wayland` target. |
 | `desktop_autostart` | `true` / `false`; default `true` | Installs the desktop startup service; automatically disabled with a log notice when `desktop` is `none`. |
-| `display_backend` | `x11` / `anland-wayland` | Defaults to Wayland in the Chinese workflow and X11 in the English workflow; Arch KDE and some profiles force Wayland. |
+| `display_backend` | `x11` / `anland-wayland` | Defaults to Wayland in the Chinese workflow and X11 in the English workflow; KDE on Fedora 45 and Arch and some other profiles force Wayland. |
 | `PulseAudio` | `socket` / `tcp` / `none`; default `socket` | X11 audio forwarding; Anland sets this to `none`. |
 | `enable_zh_tz` | `true` / `false` | Installs Chinese locale and Shanghai timezone; defaults differ by workflow. |
 | `enable_mesa` | `true` / `false`; default `true` | Adds Snapdragon GPU/Mesa support. |

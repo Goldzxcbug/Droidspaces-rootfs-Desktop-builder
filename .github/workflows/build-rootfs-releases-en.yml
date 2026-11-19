@@ -15,6 +15,7 @@ on:
           - Ubuntu-26
           - Fedora-43
           - Fedora-44
+          - Fedora-45
           - Arch
           - all
           - all-wayland
@@ -49,7 +50,7 @@ on:
         type: boolean
         default: true
       display_backend:
-        description: Display backend (Arch KDE and KDE mobile/GNOME/Anland Next/Niri/Hyprland/Mango/Denial always use Anland Wayland)
+        description: Display backend (Fedora 45 KDE, Arch KDE and KDE mobile/GNOME/Anland Next/Niri/Hyprland/Mango/Denial always use Anland Wayland)
         required: true
         type: choice
         default: x11
@@ -130,7 +131,87 @@ permissions:
   contents: write
 
 jobs:
+  wait-for-fedora45-assets:
+    name: Wait for Fedora 45 packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PACKAGE_REPO: Goldzxcbug/droidspaces-package
+      ANLAND_RUN: '44495865452'
+      TUI_RUN: '44495865298'
+      MESA_RUN: '44495865734'
+      TUI_REVISION: 7a687ac5f928f985c29f0a0b27a16fedffb53d19
+    steps:
+      - name: Check the rolling release manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://github.com/$PACKAGE_REPO/releases/download"
+          download() {
+            curl -fsSL --connect-timeout 10 --max-time 25 "$base/$1/$2"
+          }
+
+          completed_checks=0
+          deadline=$((SECONDS + 19800))
+          while (( SECONDS < deadline )); do
+            pending=()
+            for family in kde gnome niri hyprland mango denial session; do
+              if ! manifest="$(download "anland-$family-packages" "anland-$family-manifest")" ||
+                 ! grep -Eq "^revision=run-${ANLAND_RUN}-[0-9]+$" <<< "$manifest" ||
+                 ! grep -q '^fedora45=' <<< "$manifest"; then
+                pending+=("anland-$family")
+              fi
+            done
+
+            if ! manifest="$(download Gold-bug-tui Gold-bug-tui-manifest)" ||
+               ! grep -Fxq "revision=$TUI_REVISION" <<< "$manifest"; then
+              pending+=(tui)
+            fi
+
+            if ! manifest="$(download mesa-for-android-container mesa-distribution-manifest)" ||
+               ! grep -Eq '_fedora_45_arm64\.tar\.gz$' <<< "$manifest"; then
+              pending+=(mesa)
+            fi
+
+            if (( ${#pending[@]} == 0 )); then
+              echo 'Fedora 45 artifacts are ready.'
+              exit 0
+            fi
+
+            printf 'Waiting for %s\n' "${pending[*]}"
+            all_completed=true
+            for run_id in "$ANLAND_RUN" "$TUI_RUN" "$MESA_RUN"; do
+              if ! state="$(gh run view "$run_id" --repo "$PACKAGE_REPO" \
+                --json status,conclusion --jq '[.status,.conclusion] | join(":")')"; then
+                all_completed=false
+                continue
+              fi
+              case "$state" in
+                completed:success) ;;
+                completed:*)
+                  echo "Dependency run $run_id ended with ${state#*:}."
+                  exit 1
+                  ;;
+                *) all_completed=false ;;
+              esac
+            done
+
+            if [[ "$all_completed" == true ]]; then
+              completed_checks=$((completed_checks + 1))
+              if (( completed_checks >= 8 )); then
+                echo 'The dependency runs completed but the expected Fedora 45 assets are missing.'
+                exit 1
+              fi
+            fi
+            sleep 45
+          done
+
+          echo 'Timed out waiting for Fedora 45 assets.'
+          exit 1
+
   build:
+    needs: wait-for-fedora45-assets
     name: Build
     uses: ./.github/workflows/build-rootfs-core.yml
     with:
@@ -154,3 +235,4 @@ jobs:
       enable_zip: ${{ inputs.enable_zip }}
       enable_docker: ${{ inputs.enable_docker }}
       wayland_package_repository: ${{ inputs.wayland_package_repository }}
+      publish_release: false

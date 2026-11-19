@@ -24,11 +24,11 @@ done
 
 declare -A distro_name=(
   [Debian-13]='Debian 13' [Ubuntu-26]='Ubuntu 26.04'
-  [Fedora-43]='Fedora 43' [Fedora-44]='Fedora 44' [Arch]='Arch Linux'
+  [Fedora-43]='Fedora 43' [Fedora-44]='Fedora 44' [Fedora-45]='Fedora 45' [Arch]='Arch Linux'
 )
 declare -A distro_id=(
   [Debian-13]='Debian' [Ubuntu-26]='Ubuntu'
-  [Fedora-43]='Fedora' [Fedora-44]='Fedora' [Arch]='Arch'
+  [Fedora-43]='Fedora' [Fedora-44]='Fedora' [Fedora-45]='Fedora' [Arch]='Arch'
 )
 declare -A desktop_name=(
   [kde]='KDE Plasma' [kde-mobile]='KDE Plasma Mobile' [gnome]='GNOME'
@@ -45,6 +45,7 @@ declare -A distro_detail_zh=(
   [Ubuntu-26]='基于 Ubuntu 26.04 ARM64，预装常用容器工具、网络与 SSH 支持'
   [Fedora-43]='基于 Fedora 43 ARM64，包含 DNF 管理工具、网络与 SSH 支持'
   [Fedora-44]='基于 Fedora 44 ARM64，包含 DNF 管理工具、网络与 SSH 支持'
+  [Fedora-45]='基于 Fedora 45 ARM64，包含 DNF 管理工具、网络与 SSH 支持'
   [Arch]='基于 Arch Linux ARM 滚动发行版，包含 Pacman、网络与 SSH 支持'
 )
 declare -A distro_detail_en=(
@@ -52,6 +53,7 @@ declare -A distro_detail_en=(
   [Ubuntu-26]='Based on Ubuntu 26.04 for ARM64, with common container utilities, networking, and SSH support'
   [Fedora-43]='Based on Fedora 43 for ARM64, with DNF tools, networking, and SSH support'
   [Fedora-44]='Based on Fedora 44 for ARM64, with DNF tools, networking, and SSH support'
+  [Fedora-45]='Based on Fedora 45 for ARM64, with DNF tools, networking, and SSH support'
   [Arch]='Based on rolling Arch Linux ARM, with Pacman, networking, and SSH support'
 )
 declare -A desktop_detail_zh=(
@@ -89,6 +91,7 @@ for path in "$ASSETS_DIR"/*.tar.xz; do
   if [[ "$file" == Ubuntu-26-* ]]; then distro=Ubuntu-26; rest="${file#Ubuntu-26-}"; fi
   if [[ "$file" == Fedora-43-* ]]; then distro=Fedora-43; rest="${file#Fedora-43-}"; fi
   if [[ "$file" == Fedora-44-* ]]; then distro=Fedora-44; rest="${file#Fedora-44-}"; fi
+  if [[ "$file" == Fedora-45-* ]]; then distro=Fedora-45; rest="${file#Fedora-45-}"; fi
   if [[ "$file" == Arch-* ]]; then distro=Arch; rest="${file#Arch-}"; fi
   desktop="${rest%%-Wayland-*}"
   [[ -n "${desktop_name[$desktop]:-}" ]] || continue
@@ -118,6 +121,6 @@ for path in "$ASSETS_DIR"/*.tar.xz; do
   entries="$(jq --argjson entry "$entry" '. + [$entry]' <<<"$entries")"
   count=$((count + 1))
 done
-(( count == 40 )) || { echo "期望 40 个 $LANGUAGE 资产，实际找到 $count" >&2; exit 1; }
+(( count == 48 )) || { echo "期望 48 个 $LANGUAGE 资产，实际找到 $count" >&2; exit 1; }
 mkdir -p "${OUTPUT%/*}"
 jq 'sort_by(.distro, .name, .architecture)' <<<"$entries" > "$OUTPUT"

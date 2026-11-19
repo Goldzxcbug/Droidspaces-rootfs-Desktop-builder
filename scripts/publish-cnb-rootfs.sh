@@ -279,8 +279,8 @@ if [[ -n "${CNB_LOCAL_ASSETS_DIR:-}" ]]; then
     for asset_name in "${expected_assets[@]}"; do
         [[ "$asset_name" == *-zh.tar.xz ]] && archive_count=$((archive_count + 1))
     done
-    if [[ "$archive_count" -ne 40 || ! -f "$local_assets_dir/rootfs_zh.json" || ! -f "$local_assets_dir/rootfs.json" ]]; then
-        echo "本地 CNB 资产不完整：需要 40 个中文压缩包及 rootfs_zh.json、rootfs.json。" >&2
+    if [[ "$archive_count" -ne 48 || ! -f "$local_assets_dir/rootfs_zh.json" || ! -f "$local_assets_dir/rootfs.json" ]]; then
+        echo "本地 CNB 资产不完整：需要 48 个中文压缩包及 rootfs_zh.json、rootfs.json。" >&2
         exit 1
     fi
 else
@@ -314,7 +314,7 @@ fi
 
 if [[ "${CNB_ROOTFS_LANGUAGE:-}" == zh ]]; then
     release_name='Droidspaces 全桌面 Wayland RootFS（简体中文）'
-    release_body=$'## 简体中文 RootFS\n\n面向 Droidspaces 的 ARM64 滚动 RootFS，提供 Debian 13、Ubuntu 26.04、Fedora 43、Fedora 44 和 Arch Linux 的 Anland Wayland 桌面镜像。\n\n- 覆盖 8 种桌面环境：KDE Plasma、KDE Plasma Mobile、GNOME、Anland Next、Niri、Hyprland、Mango 和 Denial。\n- 共 40 个简体中文 `.tar.xz` 镜像，均面向 ARM64。\n- `rootfs.json` 包含全部中文 RootFS 地址；`rootfs_zh.json` 是订阅清单，包含版本、文件大小、SHA-256 校验值及 CNB 下载地址。\n- 镜像包含 Droidspaces 桌面自动启动配置和高通 Adreno/Mesa 支持。\n\n在 Droidspaces RootFS 管理中添加 `rootfs_zh.json` 即可订阅。本 CNB Release 仅发布简体中文 RootFS，并随每周滚动构建更新。'
+    release_body=$'## 简体中文 RootFS\n\n面向 Droidspaces 的 ARM64 滚动 RootFS，提供多种发行版的 Anland Wayland 桌面镜像。\n\n- 覆盖 8 种桌面环境：KDE Plasma、KDE Plasma Mobile、GNOME、Anland Next、Niri、Hyprland、Mango 和 Denial。\n- `rootfs.json` 包含全部中文 RootFS 地址；`rootfs_zh.json` 是订阅清单，包含版本、文件大小、SHA-256 校验值及 CNB 下载地址。\n- 镜像包含 Droidspaces 桌面自动启动配置和高通 Adreno/Mesa 支持。\n\n在 Droidspaces RootFS 管理中添加 `rootfs_zh.json` 即可订阅。本 CNB Release 仅发布简体中文 RootFS，并随每周滚动构建更新。'
 fi
 
 # 优先复用调用方已经下载好的本地资产，避免再次下载数十 GiB 附件而耗尽运行器磁盘。
@@ -367,9 +367,10 @@ if [[ "${CNB_ROOTFS_LANGUAGE:-}" == zh ]]; then
     release_body+="- 构建标识：$release_build_id"$'\n'
     release_body+="- 构建时间（UTC）：$release_build_time"$'\n'
     release_body+='- 滚动标签：'"$RELEASE_TAG"$'\n'
-    release_body+='- 架构：ARM64；镜像数量：40 个简体中文 RootFS。'
+    archive_count="$(jq -er 'length' "$manifest")"
+    release_body+="- 架构为 ARM64，共 $archive_count 个简体中文 RootFS。"
     release_body+=$'\n\n### 全部 RootFS 地址索引\n\n'
-    release_body+="[rootfs.json](https://cnb.cool/$CNB_RELEASE_REPOSITORY/-/releases/download/$RELEASE_TAG/rootfs.json) — 全部 40 个简体中文 RootFS 的下载地址。"
+    release_body+="[rootfs.json](https://cnb.cool/$CNB_RELEASE_REPOSITORY/-/releases/download/$RELEASE_TAG/rootfs.json) — 全部 $archive_count 个简体中文 RootFS 的下载地址。"
     release_body+=$'\n\n'
     release_body+="[rootfs_zh.json](https://cnb.cool/$CNB_RELEASE_REPOSITORY/-/releases/download/$RELEASE_TAG/rootfs_zh.json) — Droidspaces 中文订阅清单。"
 fi

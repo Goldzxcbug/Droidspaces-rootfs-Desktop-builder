@@ -110,7 +110,7 @@ droidspaces-tui --json
 
 ## Mesa Installer
 
-`install-mesa` selects the ARM64 Mesa asset for the current distribution from the distribution Release in GitHub/proxy mode; CNB mode reads only `mesa-distribution-manifest` from the matching CNB Release. It then installs the synchronized `msm_drm_drv_video.so`. It supports Debian 13, Ubuntu 24.04/25.10/26.04, Fedora 43/44, and Arch Linux. The video codec driver is installed in each distribution's default libva driver directory: `/usr/lib/aarch64-linux-gnu/dri` on Debian/Ubuntu, `/usr/lib64/dri` on Fedora, and `/usr/lib/dri` on Arch Linux.
+`install-mesa` selects the ARM64 Mesa asset for the current distribution from the distribution Release in GitHub/proxy mode; CNB mode reads only `mesa-distribution-manifest` from the matching CNB Release. It then installs the synchronized `msm_drm_drv_video.so`. It supports Debian 13, Ubuntu 24.04/25.10/26.04, Fedora 43/44/45, and Arch Linux. The video codec driver is installed in each distribution's default libva driver directory: `/usr/lib/aarch64-linux-gnu/dri` on Debian/Ubuntu, `/usr/lib64/dri` on Fedora, and `/usr/lib/dri` on Arch Linux.
 
 The installer strictly validates Release tags, asset names, and downloaded content. GitHub/proxy mode retains GitHub Release API SHA-256 cross-checks; CNB mode uses only the SHA-256 values and sizes in the CNB distribution manifest, then still verifies the synchronized media-driver `SHA256SUMS`. Downloads can resume, and temporary files are removed on exit.
 
@@ -157,7 +157,7 @@ KDE/KDE Mobile profiles install `xdg-desktop-portal` and `xdg-desktop-portal-kde
 
 ## Anland KDE Installer
 
-`install-anland-kde` reads `anland-kde-manifest` from the fixed `anland-kde-packages` rolling Release in `Goldzxcbug/droidspaces-package` by default, then installs the matching patched KWin/Xwayland packages for Debian 13, Ubuntu 26.04, Fedora 43/44, or Arch Linux on ARM64.
+`install-anland-kde` reads `anland-kde-manifest` from the fixed `anland-kde-packages` rolling Release in `Goldzxcbug/droidspaces-package` by default, then installs the matching patched KWin/Xwayland packages for Debian 13, Ubuntu 26.04, Fedora 43/44/45, or Arch Linux on ARM64.
 
 ```bash
 sudo install-anland-kde
@@ -176,7 +176,7 @@ The Anland host module, app, SELinux policy, bind mount, and Droidspaces permiss
 
 ## Anland GNOME Installer
 
-`install-anland-gnome` reads the matching archive from `anland-gnome-manifest` in the fixed `anland-gnome-packages` rolling Release. It installs patched Mutter runtime packages for Debian 13, Ubuntu 26.04, Fedora 43/44, or Arch Linux ARM64 and locks them with APT holds, DNF excludes, or Pacman `IgnorePkg`. Download sources and arguments match the KDE installer.
+`install-anland-gnome` reads the matching archive from `anland-gnome-manifest` in the fixed `anland-gnome-packages` rolling Release. It installs patched Mutter runtime packages for Debian 13, Ubuntu 26.04, Fedora 43/44/45, or Arch Linux ARM64 and locks them with APT holds, DNF excludes, or Pacman `IgnorePkg`. Download sources and arguments match the KDE installer.
 
 ```bash
 sudo install-anland-gnome
@@ -191,7 +191,7 @@ sudo ANLAND_RELEASE_REPOSITORY=owner/repository \
 
 ## Anland Next Installer
 
-`install-anland-next` reads `anland-session-manifest` from the fixed `anland-session-packages` rolling Release and installs the `anland-session` package for Debian 13, Ubuntu 26.04, Fedora 43/44, or Arch Linux on ARM64. Its source selection, mirror digest checks, and arguments match the KDE installer.
+`install-anland-next` reads `anland-session-manifest` from the fixed `anland-session-packages` rolling Release and installs the `anland-session` package for Debian 13, Ubuntu 26.04, Fedora 43/44/45, or Arch Linux on ARM64. Its source selection, mirror digest checks, and arguments match the KDE installer.
 
 ```bash
 sudo install-anland-next
@@ -212,7 +212,7 @@ sudo ANLAND_NEXT_RELEASE_REPOSITORY=owner/repository \
 
 ## Anland Niri, Hyprland, Mango, and Denial Installers
 
-Niri, Hyprland, Mango, and Denial installers fetch their compositor and patched `xorg-xwayland` packages from fixed rolling Releases on Debian 13, Ubuntu 26, Fedora 43/44, and Arch ARM64. Each desktop has its own profile at `scripts/desktops/<slug>.sh`; the profile provides a terminal, XDG portal, audio, and fonts, and Niri on Arch also includes common desktop utilities. These compositors share patched Xwayland, and their installers prevent conflicting replacement while preserving packages used by other installed components.
+Niri, Hyprland, Mango, and Denial installers fetch their compositor and patched `xorg-xwayland` packages from fixed rolling Releases on Debian 13, Ubuntu 26, Fedora 43/44/45, and Arch ARM64. Each desktop has its own profile at `scripts/desktops/<slug>.sh`; the profile provides a terminal, XDG portal, audio, and fonts, and Niri on Arch also includes common desktop utilities. These compositors share patched Xwayland, and their installers prevent conflicting replacement while preserving packages used by other installed components.
 
 Choose the command for your desktop:
 

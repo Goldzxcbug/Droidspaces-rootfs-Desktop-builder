@@ -28,7 +28,7 @@
 
 ## 支持范围
 
-构建目标：`Debian-13`、`Ubuntu-24`、`Ubuntu-25`、`Ubuntu-26`、`Fedora-43`、`Fedora-44`、`Arch`。GNOME、Niri、Hyprland、Mango 和 Denial 支持 Debian 13、Ubuntu 26、Fedora 43/44 与 Arch Linux ARM。桌面及显示后端的完整兼容矩阵见[构建选项](docs/zh/构建选项.md)。
+构建目标：`Debian-13`、`Ubuntu-24`、`Ubuntu-25`、`Ubuntu-26`、`Fedora-43`、`Fedora-44`、`Fedora-45`、`Arch`。GNOME、Niri、Hyprland、Mango 和 Denial 支持 Debian 13、Ubuntu 26、Fedora 43/44/45 与 Arch Linux ARM。桌面及显示后端的完整兼容矩阵见[构建选项](docs/zh/构建选项.md)。
 
 ## 致谢
 

@@ -126,7 +126,7 @@ install_profile() {
             install_minimal_deb
             install_dart_deb
             ;;
-        fedora:43*|fedora:44*)
+        fedora:43*|fedora:44*|fedora:45*)
             install_minimal_fedora
             install_dart_fedora
             ;;

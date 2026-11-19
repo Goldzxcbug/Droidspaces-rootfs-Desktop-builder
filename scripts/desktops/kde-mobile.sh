@@ -72,8 +72,10 @@ install_apt() {
 }
 
 install_fedora() {
+    local settings_package=systemsettings
     case "$VERSION_ID" in
         43|44) ;;
+        45) settings_package=plasma-systemsettings ;;
         *) echo "KDE mobile 不支持 Fedora $VERSION_ID" >&2; return 1 ;;
     esac
 
@@ -82,7 +84,7 @@ install_fedora() {
         plasma-nano plasma-mobile maliit-keyboard maliit-framework \
         kwin pipewire pipewire-alsa pipewire-pulseaudio wireplumber xdg-desktop-portal xdg-desktop-portal-kde powerdevil plasma-pa upower pulseaudio-utils \
         konsole dolphin kate kinfocenter glx-utils vulkan-tools \
-        systemsettings plasma-systemmonitor kscreenlocker kio-extras xdg-user-dirs \
+        "$settings_package" plasma-systemmonitor kscreenlocker kio-extras xdg-user-dirs \
         dolphin-plugins ffmpegthumbs kdegraphics-thumbnailers kf6-kimageformats plasma-settings angelfish \
         gstreamer1-plugins-base gstreamer1-plugins-good sound-theme-freedesktop libcanberra-gtk3 \
         polkit-kde-agent-1 plasma-workspace breeze-icon-theme plasma-breeze qt6-qtsvg \

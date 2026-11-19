@@ -15,6 +15,7 @@ on:
           - Ubuntu-26
           - Fedora-43
           - Fedora-44
+          - Fedora-45
           - Arch
           - all
           - all-wayland
@@ -49,7 +50,7 @@ on:
         type: boolean
         default: true
       display_backend:
-        description: Display backend (Arch KDE and KDE mobile/GNOME/Anland Next/Niri/Hyprland/Mango/Denial always use Anland Wayland)
+        description: Display backend (Fedora 45 KDE, Arch KDE and KDE mobile/GNOME/Anland Next/Niri/Hyprland/Mango/Denial always use Anland Wayland)
         required: true
         type: choice
         default: x11

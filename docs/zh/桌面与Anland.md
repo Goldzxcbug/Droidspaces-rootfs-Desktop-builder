@@ -8,7 +8,7 @@
 
 | 桌面与后端 | 手动启动命令 |
 | --- | --- |
-| KDE + X11（Arch 不支持） | `DISPLAY=:5 startplasma-x11` |
+| KDE + X11（Fedora 45 与 Arch 不支持） | `DISPLAY=:5 startplasma-x11` |
 | KDE + Anland Wayland | `startplasma-wayland` |
 | KDE Mobile + Anland Wayland | `startplasmamobile` |
 | GNOME + Anland Wayland | `gnome-session --session=gnome` |
@@ -30,7 +30,7 @@ startplasma-x11
 
 ### Wayland 和 Anland 宿主端配置
 
-Anland Wayland 支持 Debian 13、Ubuntu 26、Fedora 43/44 和 Arch。Arch KDE 仅使用 Anland Wayland；KDE 使用 patched KWin/Xwayland，GNOME 使用 patched Mutter。GNOME 在这些发行版上安装完整桌面和基础应用。Niri、Hyprland、Mango、Denial 提供轻量会话、终端、XDG portal、音频和字体，用户可自行添加桌面应用。它们的 ARM64 包由 [`droidspaces-package`](https://github.com/Goldzxcbug/droidspaces-package) 发布，RootFS 构建时从对应 Release 安装。
+Anland Wayland 支持 Debian 13、Ubuntu 26、Fedora 43/44/45 和 Arch。Fedora 45 与 Arch 的 KDE 仅使用 Anland Wayland；KDE 使用 patched KWin/Xwayland，GNOME 使用 patched Mutter。GNOME 在这些发行版上安装完整桌面和基础应用。Niri、Hyprland、Mango、Denial 提供轻量会话、终端、XDG portal、音频和字体，用户可自行添加桌面应用。它们的 ARM64 包由 [`droidspaces-package`](https://github.com/Goldzxcbug/droidspaces-package) 发布，RootFS 构建时从对应 Release 安装。
 
 在 Android 设备上完成以下准备：
 
@@ -61,7 +61,7 @@ Wayland 镜像中的 Chrome 默认走 Wayland 输入法。要验证 XWayland 路
 sudo install-anland-kde
 ```
 
-GNOME 安装器可在 Debian 13、Ubuntu 26、Fedora 43/44 与 Arch Linux ARM 上使用：
+GNOME 安装器可在 Debian 13、Ubuntu 26、Fedora 43/44/45 与 Arch Linux ARM 上使用：
 
 ```bash
 sudo install-anland-gnome

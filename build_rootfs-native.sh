@@ -84,11 +84,6 @@ if [[ "$DESKTOP" == kde-mobile || "$DESKTOP" == gnome || "$DESKTOP" == anland-ne
       "$DESKTOP" == niri || "$DESKTOP" == hyprland || "$DESKTOP" == mango || "$DESKTOP" == denial ]]; then
   DISPLAY_BACKEND="anland-wayland"
 fi
-if [[ "$DISPLAY_BACKEND" == anland-wayland ]]; then
-  PulseAudio="none"
-fi
-ANLAND_PACKAGE_FAMILY="$(anland_package_family "$DESKTOP" "$DISPLAY_BACKEND" || true)"
-
 # 校验：检查是否传递了 Dockerfile 模板文件
 if [ -z "$DOCKERFILE" ]; then
     echo "错误：必须使用 -i 参数指定模板文件。"
@@ -103,6 +98,14 @@ fi
 
 # 提取发行版目标名称（例如：Debian-13.Dockerfile -> Debian-13）
 PREFIX="$(basename "${DOCKERFILE%.Dockerfile}")"
+
+if [[ "$PREFIX" == Fedora-45 && "$DESKTOP" == kde ]]; then
+  DISPLAY_BACKEND="anland-wayland"
+fi
+if [[ "$DISPLAY_BACKEND" == anland-wayland ]]; then
+  PulseAudio="none"
+fi
+ANLAND_PACKAGE_FAMILY="$(anland_package_family "$DESKTOP" "$DISPLAY_BACKEND" || true)"
 
 if ! desktop_target_supported "$PREFIX" "$DESKTOP"; then
   echo "错误：$PREFIX 不支持桌面 $DESKTOP。" >&2

@@ -253,8 +253,8 @@ jobs:
               esac
             fi
 
-            case "$DESKTOP" in
-              kde-mobile|gnome|anland-next|niri|hyprland|mango|denial)
+            case "$TARGET:$DESKTOP" in
+              Fedora-45:kde|*:kde-mobile|*:gnome|*:anland-next|*:niri|*:hyprland|*:mango|*:denial)
                 DISPLAY_BACKEND="anland-wayland"
                 ;;
             esac

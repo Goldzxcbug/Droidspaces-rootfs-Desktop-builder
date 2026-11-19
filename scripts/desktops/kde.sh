@@ -76,16 +76,24 @@ install_apt() {
 }
 
 install_fedora() {
+    local settings_package=systemsettings
+    local -a x11_session_packages=(plasma-workspace-x11 kwin-x11)
+
     case "$VERSION_ID" in
         43|44) ;;
+        45)
+            settings_package=plasma-systemsettings
+            # Fedora 45 Plasma 6.8 replaces the old X11 session packages.
+            x11_session_packages=()
+            ;;
         *) echo "KDE 不支持 Fedora $VERSION_ID" >&2; return 1 ;;
     esac
 
     dnf install -y --setopt=install_weak_deps=False \
         dbus-x11 xrandr xset xrdb xhost google-noto-cjk-fonts google-noto-emoji-color-fonts plasma-desktop pipewire pipewire-alsa pipewire-pulseaudio wireplumber xdg-desktop-portal xdg-desktop-portal-kde powerdevil kscreen plasma-pa ark kwin upower konsole \
         dolphin kate kinfocenter glx-utils pulseaudio-utils vulkan-tools fedora-logos aha clinfo dmidecode libdisplay-info wayland-utils xorg-x11-server-Xorg \
-        kfind plasma-systemmonitor filelight glmark2 vkmark systemsettings kscreenlocker kio-extras xdg-user-dirs dolphin-plugins ffmpegthumbs kdegraphics-thumbnailers \
-        kf6-kimageformats plasma-browser-integration libcanberra-gtk3 gstreamer1-plugins-base gstreamer1-plugins-good sound-theme-freedesktop plasma-milou plasma-workspace plasma-workspace-x11 kwin-x11
+        kfind plasma-systemmonitor filelight glmark2 vkmark "$settings_package" kscreenlocker kio-extras xdg-user-dirs dolphin-plugins ffmpegthumbs kdegraphics-thumbnailers \
+        kf6-kimageformats plasma-browser-integration libcanberra-gtk3 gstreamer1-plugins-base gstreamer1-plugins-good sound-theme-freedesktop plasma-milou plasma-workspace "${x11_session_packages[@]}"
 }
 
 install_arch() {

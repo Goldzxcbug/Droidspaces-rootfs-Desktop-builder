@@ -123,12 +123,16 @@ if [[ "$desktop" == anland-next ]]; then
     configure_anland_next_runtime
 fi
 
-if [[ "$desktop" == kde ]]; then
+if [[ "$desktop" == kde && ! -e "$rootfs/home/$username/.config/kwinrc" ]]; then
     install -d -m 0755 "$rootfs/home/$username/.config"
     cat > "$rootfs/home/$username/.config/kwinrc" <<'EOF'
 [Compositing]
 Enabled=false
 EOF
+fi
+
+if [[ "${ENABLE_srf_ARG:-false}" == true ]]; then
+    "$rootfs/usr/local/sbin/install-fcitx5" configure "$desktop" "$backend" "$username" "${ENABLE_zh_tz_ARG:-false}"
 fi
 
 if [[ -z "$rootfs" ]]; then

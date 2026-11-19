@@ -395,6 +395,16 @@ cat > "$temporary_wrapper" <<'CHROME_LAUNCHER'
 #!/bin/bash
 # One Chrome entrypoint for menus and CLI. No Python or global Mesa changes.
 set -euo pipefail
+CHROME_LAUNCHER
+input_method=
+if [[ "${ENABLE_srf_ARG:-false}" == true ]]; then
+    case "$desktop" in
+        anland-next) input_method=gtk ;;
+        *)           input_method=wayland ;;
+    esac
+fi
+printf 'input_method=%q\n' "$input_method" >> "$temporary_wrapper"
+cat >> "$temporary_wrapper" <<'CHROME_LAUNCHER'
 
 enabled_keys=(AcceleratedVideoDecoder AcceleratedVideoDecodeLinuxGL AcceleratedVideoEncoder)
 enabled_values=("${enabled_keys[@]}")
@@ -402,6 +412,8 @@ disabled_keys=()
 disabled_values=()
 remaining=()
 positionals=()
+ozone_platform=
+ozone_hint=
 
 # Keep order while replacing an existing feature's trial/parameter value.
 # Indexed arrays avoid evaluating caller-controlled associative subscripts.
@@ -460,6 +472,8 @@ while (($#)); do
             ;;
         --enable-features=*) parse_features enabled "${argument#*=}" ;;
         --disable-features=*) parse_features disabled "${argument#*=}" ;;
+        --ozone-platform=*) ozone_platform=${argument#*=}; remaining+=("$argument") ;;
+        --ozone-platform-hint=*) ozone_hint=${argument#*=}; remaining+=("$argument") ;;
         *) remaining+=("$argument") ;;
     esac
     shift
@@ -478,6 +492,19 @@ supplied() {
 defaults=()
 if ! supplied --ozone-platform && ! supplied --ozone-platform-hint; then
     defaults+=(--ozone-platform=wayland)
+fi
+if [[ -n "$input_method" ]]; then
+    if [[ "${ozone_platform:-$ozone_hint}" == x11 ]]; then
+        export GTK_IM_MODULE="${GTK_IM_MODULE:-fcitx}"
+    elif ! supplied --disable-wayland-ime && ! supplied --gtk-version; then
+        if [[ "$input_method" == gtk ]] && ! supplied --enable-wayland-ime && ! supplied --wayland-text-input-version; then
+            export GTK_IM_MODULE="${GTK_IM_MODULE:-fcitx}"
+            defaults+=(--gtk-version=4)
+        else
+            supplied --enable-wayland-ime || defaults+=(--enable-wayland-ime)
+            supplied --wayland-text-input-version || defaults+=(--wayland-text-input-version=3)
+        fi
+    fi
 fi
 if ! supplied --render-node-override; then
     defaults+=(--render-node-override=/dev/dri/renderD128)
@@ -553,6 +580,9 @@ if [[ ${DMD_CHROME_LAUNCH_DRY_RUN:-} == 1 ]]; then
     printf 'exec env MESA_LOADER_DRIVER_OVERRIDE=%q' "$MESA_LOADER_DRIVER_OVERRIDE"
     if [[ ${LD_LIBRARY_PATH+x} ]]; then
         printf ' LD_LIBRARY_PATH=%q' "$LD_LIBRARY_PATH"
+    fi
+    if [[ -n "$input_method" && -v GTK_IM_MODULE ]]; then
+        printf ' GTK_IM_MODULE=%q' "$GTK_IM_MODULE"
     fi
     printf ' %q' "$target" "${defaults[@]}" "${remaining[@]}" "${positionals[@]}"
     printf '\n'

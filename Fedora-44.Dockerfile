@@ -46,12 +46,8 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     # 核心内核模块支持及语言包
     kmod tzdata tar glibc-locale-source glibc-langpack-en glibc-langpack-zh && \
     /usr/local/sbin/install-desktop "$DESKTOP" && \
-    # 输入法 fcitx5 (可选)
     if [ "$ENABLE_srf_ARG" = "true" ]; then \
-        dnf install -y  fcitx5 fcitx5-qt fcitx5-gtk ; \
-    fi && \
-    if [ "$ENABLE_srf_ARG" = "true" ] && [ "$ENABLE_zh_tz_ARG" = "true" ]; then \
-        dnf install -y --setopt=install_weak_deps=False fcitx5-chinese-addons; \
+        /usr/local/sbin/install-fcitx5 install "${ENABLE_zh_tz_ARG:-false}"; \
     fi && \
     ## 开发工具集成 (可选)
     if [ "$ENABLE_kfgj_ARG" = "true" ]; then \
@@ -128,32 +124,10 @@ RUN if [ "$PulseAudio" = "socket" ]; then \
         echo "PULSE_SERVER=tcp:127.0.0.1:4713" >> /etc/environment; \
     fi
 
-# 输入法开机自启动
+# 配置桌面会话与可选输入法
 COPY scripts/start/ /tmp/droidspaces-start/
 RUN <<'EOF_RUN'
-    if [ "$ENABLE_srf_ARG" = "true" ]; then
-    mkdir -p /home/${USERNAME}/.config/autostart
-    cat <<'EOF' > /home/${USERNAME}/.config/autostart/fcitx5.desktop
-[Desktop Entry]
-Name=Fcitx5
-GenericName=Input Method
-Comment=Start Input Method
-Exec=fcitx5 -d
-Icon=fcitx
-Terminal=false
-Type=Application
-Categories=System;Utility;
-StartupNotify=false
-NoDisplay=true
-EOF
-    cat <<'EOF' >> /etc/environment
-XMODIFIERS=@im=fcitx5
-GTK_IM_MODULE=fcitx5
-QT_IM_MODULE=fcitx5
-SDL_IM_MODULE=fcitx5
-GLFW_IM_MODULE=fcitx
-EOF
-    fi
+    set -e
 
     if [ "$ENABLE_mesa_ARG" = "true" ] && [ "$DISPLAY_BACKEND" != "anland-wayland" ] ; then
         cat <<'EOF' >> /etc/environment
@@ -368,6 +342,7 @@ RUN rm -f \
         /usr/local/sbin/configure-chrome \
         /usr/local/sbin/configure-desktop \
         /usr/local/sbin/install-desktop \
+        /usr/local/sbin/install-fcitx5 \
         /usr/local/sbin/install-anland-desktop \
         /usr/local/sbin/install-droidspaces-usb-manager \
         /usr/local/sbin/systemd257 \

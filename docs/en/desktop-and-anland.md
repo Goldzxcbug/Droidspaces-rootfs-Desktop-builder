@@ -47,6 +47,12 @@ Prepare the Android device:
 
 Start the container and log in as the normal user. For KDE run `startplasma-wayland`; KDE Mobile uses `startplasmamobile`; GNOME uses `gnome-session --session=gnome`.
 
+### Fcitx5 input method
+
+Enable `enable_srf` when building the RootFS to install Fcitx5. Chinese builds include Pinyin by default. In a text field, press `Ctrl+Space` to switch input methods. GTK3/4 and recent Qt6 apps prefer the native Wayland input protocol. XWayland apps use XIM or the GTK and Qt input modules with the same Fcitx5 instance. Native GTK and Qt apps on Anland Next use the Fcitx5 toolkit modules.
+
+Chrome in Wayland images defaults to Wayland input. To check XWayland, quit any open Chrome windows, run `google-chrome --ozone-platform=x11`, and test Pinyin in the address bar. You can also launch GTK apps with `GDK_BACKEND=x11` and Qt apps with `QT_QPA_PLATFORM=xcb` to test their XWayland input.
+
 ### Install or update Anland desktop packages
 
 The build fetches matching packages automatically. To install them separately in a running ARM64 RootFS, run inside the container:

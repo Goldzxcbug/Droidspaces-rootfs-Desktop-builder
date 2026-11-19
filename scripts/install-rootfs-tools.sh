@@ -111,7 +111,7 @@ main() {
     install_tui_file droidspaces-video.sh /usr/local/bin/droidspaces-video.sh
     install_tui_file Gold-bug-tui-manifest /usr/local/share/droidspaces-tui/Gold-bug-tui-manifest 0644
     install_tui_file Gold-bug-tui-files /usr/local/share/droidspaces-tui/Gold-bug-tui-files 0644
-    for name in install-desktop configure-desktop configure-chrome; do
+    for name in install-desktop install-fcitx5 configure-desktop configure-chrome; do
         install_file "$name.sh" "/usr/local/sbin/$name"
     done
     install_file start-desktop-session.sh /usr/local/bin/start-desktop-session

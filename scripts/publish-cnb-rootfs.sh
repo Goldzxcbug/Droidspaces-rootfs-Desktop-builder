@@ -279,8 +279,8 @@ if [[ -n "${CNB_LOCAL_ASSETS_DIR:-}" ]]; then
     for asset_name in "${expected_assets[@]}"; do
         [[ "$asset_name" == *-zh.tar.xz ]] && archive_count=$((archive_count + 1))
     done
-    if [[ "$archive_count" -ne 48 || ! -f "$local_assets_dir/rootfs_zh.json" || ! -f "$local_assets_dir/rootfs.json" ]]; then
-        echo "本地 CNB 资产不完整：需要 48 个中文压缩包及 rootfs_zh.json、rootfs.json。" >&2
+    if [[ "$archive_count" -ne 47 || ! -f "$local_assets_dir/rootfs_zh.json" || ! -f "$local_assets_dir/rootfs.json" ]]; then
+        echo "本地 CNB 资产不完整：需要 47 个中文压缩包及 rootfs_zh.json、rootfs.json。" >&2
         exit 1
     fi
 else

@@ -94,7 +94,7 @@ for path in "$ASSETS_DIR"/*.tar.xz; do
   if [[ "$file" == Fedora-45-* ]]; then distro=Fedora-45; rest="${file#Fedora-45-}"; fi
   if [[ "$file" == Arch-* ]]; then distro=Arch; rest="${file#Arch-}"; fi
   desktop="${rest%%-Wayland-*}"
-  [[ -n "${desktop_name[$desktop]:-}" ]] || continue
+  [[ -n "${desktop_name[$desktop]:-}" && "$distro:$desktop" != Fedora-45:anland-next ]] || continue
   middle="${rest#${desktop}-Wayland-Droidspaces-rootfs-}"
   arch="${middle%%-*}"
   version_lang="${middle#${arch}-}"
@@ -121,6 +121,6 @@ for path in "$ASSETS_DIR"/*.tar.xz; do
   entries="$(jq --argjson entry "$entry" '. + [$entry]' <<<"$entries")"
   count=$((count + 1))
 done
-(( count == 48 )) || { echo "期望 48 个 $LANGUAGE 资产，实际找到 $count" >&2; exit 1; }
+(( count == 47 )) || { echo "期望 47 个 $LANGUAGE 资产，实际找到 $count" >&2; exit 1; }
 mkdir -p "${OUTPUT%/*}"
 jq 'sort_by(.distro, .name, .architecture)' <<<"$entries" > "$OUTPUT"

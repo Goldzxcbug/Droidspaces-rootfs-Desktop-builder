@@ -138,10 +138,10 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       PACKAGE_REPO: Goldzxcbug/droidspaces-package
-      ANLAND_RUN: '44495865452'
-      TUI_RUN: '44495865298'
+      ANLAND_RUN: '44496822160'
+      TUI_RUN: '44496822056'
       MESA_RUN: '44495865734'
-      TUI_REVISION: 7a687ac5f928f985c29f0a0b27a16fedffb53d19
+      TUI_REVISION: 7c148a70b3fa3a2b7c5b20f73c739e17f2cf5f31
     steps:
       - name: Check the rolling release manifests
         shell: bash
@@ -156,7 +156,7 @@ jobs:
           deadline=$((SECONDS + 19800))
           while (( SECONDS < deadline )); do
             pending=()
-            for family in kde gnome niri hyprland mango denial session; do
+            for family in kde gnome niri hyprland mango denial; do
               if ! manifest="$(download "anland-$family-packages" "anland-$family-manifest")" ||
                  ! grep -Eq "^revision=run-${ANLAND_RUN}-[0-9]+$" <<< "$manifest" ||
                  ! grep -q '^fedora45=' <<< "$manifest"; then

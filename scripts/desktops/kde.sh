@@ -94,6 +94,20 @@ install_arch() {
         dolphin kate kinfocenter mesa-utils libpulse vulkan-tools aha clinfo dmidecode wayland-utils xorg-server \
         kfind plasma-systemmonitor filelight glmark2 vkmark systemsettings kscreenlocker kio-extras xdg-user-dirs dolphin-plugins ffmpegthumbs kdegraphics-thumbnailers \
         kimageformats plasma-browser-integration libcanberra gstreamer gst-plugins-base gst-plugins-good sound-theme-freedesktop
+
+    # Headless loop prevention drop-ins for Droidspaces / Anland
+    for svc in plasma-polkit-agent.service plasma-kded6.service plasma-plasmashell.service plasma-powerdevil.service plasma-xdg-desktop-portal-kde.service; do
+        mkdir -p "${ROOTFS_DIR:-}/etc/systemd/user/${svc}.d"
+        cat << 'EOF_USER_DROPIN' > "${ROOTFS_DIR:-}/etc/systemd/user/${svc}.d/override.conf"
+[Unit]
+ConditionPathExists=/run/display.sock
+
+[Service]
+Restart=no
+TimeoutStartSec=15sec
+TimeoutStopSec=5sec
+EOF_USER_DROPIN
+    done
 }
 
 install_profile() {

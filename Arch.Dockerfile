@@ -273,6 +273,26 @@ for unit in systemd-udevd.service systemd-udev-trigger.service systemd-udev-sett
     printf "[Unit]\nConditionPathIsReadWrite=\n" > "/etc/systemd/system/${unit}.d/99-readonly-fix.conf"
 done
 
+# 屏蔽在移动容器中失效或产生高频轮询的后台服务与套接字，消除 restart limit 死循环与日志污染
+systemctl mask systemd-udevd-control.socket systemd-udevd-kernel.socket systemd-networkd.socket udisks2.service systemd-modules-load.service \
+               systemd-tmpfiles-setup-dev-early.service systemd-tmpfiles-setup-dev.service systemd-udev-load-credentials.service \
+               systemd-userdbd.service systemd-userdbd.socket systemd-localed.service systemd-resolved.service modprobe@loop.service modprobe@configfs.service modprobe@drm.service modprobe@fuse.service \
+               sys-kernel-tracing.mount sys-kernel-debug.mount
+
+# Headless loop prevention: KDE user service drop-in guards
+for svc in plasma-polkit-agent.service plasma-kded6.service plasma-plasmashell.service plasma-powerdevil.service plasma-xdg-desktop-portal-kde.service; do
+    mkdir -p "/etc/systemd/user/${svc}.d"
+    cat << 'EOF_DROPIN' > "/etc/systemd/user/${svc}.d/override.conf"
+[Unit]
+ConditionPathExists=/run/display.sock
+
+[Service]
+Restart=no
+TimeoutStartSec=15sec
+TimeoutStopSec=5sec
+EOF_DROPIN
+done
+
 # 限制特定的网络服务
 for unit in NetworkManager.service dhcpcd.service systemd-resolved.service systemd-networkd.service; do
     if [ -f "$GUEST_SYSTEMD_PATH/$unit" ] || [ -f "/etc/systemd/system/multi-user.target.wants/$unit" ]; then

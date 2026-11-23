@@ -259,6 +259,16 @@ jobs:
                 ;;
             esac
 
+            if [ "$TARGET" = "fnOS" ]; then
+              if [ "$DESKTOP" != "none" ] || [ "$DISPLAY_BACKEND" != "x11" ]; then
+                message "已选择 fnOS：自动固定为无桌面模式（none / x11 / 关闭自启动与音频转发）。" \
+                  "fnOS target selected: forcing headless mode (desktop=none, backend=x11, autostart=false, pulseaudio=none)."
+              fi
+              DESKTOP="none"
+              DISPLAY_BACKEND="x11"
+              DESKTOP_AUTOSTART="false"
+            fi
+
             if [ "$DESKTOP" = "none" ] && [ "$DESKTOP_AUTOSTART" = "true" ]; then
               message "桌面环境为 none：自动关闭桌面开机自启动。" \
                 "Desktop is none: disabling desktop auto-start automatically."
@@ -266,7 +276,7 @@ jobs:
             fi
 
             PULSE_AUDIO="$PULSEAUDIO_INPUT"
-            if [ "$DISPLAY_BACKEND" = "anland-wayland" ]; then
+            if [ "$DISPLAY_BACKEND" = "anland-wayland" ] || [ "$TARGET" = "fnOS" ]; then
               PULSE_AUDIO="none"
             fi
 

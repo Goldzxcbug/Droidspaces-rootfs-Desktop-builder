@@ -11,28 +11,32 @@
 #   在 Web UI 上表现为「初始化数据库失败」，并陷入无限重启循环。
 #
 # 本脚本在开机后做三件事（幂等，失败不影响开机）：
-#   1. 等 PostgreSQL socket，必要时主动拉起并重试
+#   1. 等 PostgreSQL 接受连接，必要时主动拉起并重试
 #   2. 轮询等 fnOS 主库 trim 出现（正常 triminit 在建库时也走这条路）
 #   3. 若 PG 已就绪但 trim 仍缺失，重跑 fnOS 自己的 trim_init.service
 set -u
 
-SOCKET="/var/run/postgresql/.s.PGSQL.5432"
+PG_SOCKET_DIR="/var/run/postgresql"
+PG_PORT=5432
 PG_UNIT="postgresql@15-main.service"
 INIT_UNIT="trim_init.service"
 PSQL="/usr/bin/psql"
 
-WAIT_PG="${FNOS_DB_WAIT_PG:-60}"        # 等 PG socket 的秒数
+WAIT_PG="${FNOS_DB_WAIT_PG:-60}"        # 等 PG 就绪的秒数
 WAIT_DB="${FNOS_DB_WAIT_DB:-90}"        # 等 triminit 建库的秒数
 WAIT_DB_AFTER="${FNOS_DB_WAIT_AFTER:-60}"  # 重跑 triminit 后再等的秒数
 
 log() { echo "[fnos-db-selfheal] $*"; }
 
-wait_socket() {
-    local i=0
-    while [ "$i" -lt "$WAIT_PG" ]; do
-        [ -S "$SOCKET" ] && return 0
+wait_postgresql() {
+    local start=$SECONDS
+    while [ "$((SECONDS - start))" -lt "$WAIT_PG" ]; do
+        if [ -S "$PG_SOCKET_DIR/.s.PGSQL.$PG_PORT" ] &&
+            runuser -u postgres -- /usr/bin/pg_isready -q -t 1 \
+                -h "$PG_SOCKET_DIR" -p "$PG_PORT" -U postgres -d postgres; then
+            return 0
+        fi
         sleep 1
-        i=$((i + 1))
     done
     return 1
 }
@@ -52,21 +56,28 @@ wait_trim_db() {
     return 1
 }
 
+# trim_init 只等数据库就绪，建库和重启服务仍由各自的启动流程负责。
+if [ "${1:-}" = "--wait-postgresql" ]; then
+    wait_postgresql && exit 0
+    log "PostgreSQL 未接受连接，无法启动 trim_init"
+    exit 1
+fi
+
 # 1. 确保 PostgreSQL 在跑
-if ! wait_socket; then
-    log "PostgreSQL socket 未就绪，尝试启动 $PG_UNIT"
+if ! wait_postgresql; then
+    log "PostgreSQL 未就绪，尝试启动 $PG_UNIT"
     systemctl reset-failed "$PG_UNIT" 2>/dev/null || true
     systemctl start "$PG_UNIT" 2>/dev/null || true
-    if ! wait_socket; then
-        log "启动后仍无 socket，强制重启 $PG_UNIT"
+    if ! wait_postgresql; then
+        log "启动后仍未接受连接，重启 $PG_UNIT"
         systemctl restart "$PG_UNIT" 2>/dev/null || true
+        if ! wait_postgresql; then
+            log "PostgreSQL 仍不可用，跳过自愈（请检查 $PG_UNIT 的 journal）"
+            exit 0
+        fi
     fi
 fi
 
-if ! wait_socket; then
-    log "PostgreSQL 仍不可用，跳过自愈（请检查 $PG_UNIT 的 journal）"
-    exit 0
-fi
 log "PostgreSQL 已就绪"
 
 # 2. 正常路径：triminit 正在建库时，这里会等到 trim 出现

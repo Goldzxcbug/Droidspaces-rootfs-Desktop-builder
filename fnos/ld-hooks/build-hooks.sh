@@ -1,11 +1,12 @@
 #!/bin/bash
-# 编译飞牛软解媒体服务的 LD_PRELOAD 拦截库
+# 编译飞牛的 LD_PRELOAD 兼容库
 #
-# 三个 hook：
+# 拦截库：
 #   nodri.so       —— 屏蔽 /dev/dri（我们没有 DRI/GPU 渲染节点）
 #   nodmaheap.so   —— 屏蔽 /dev/dma_heap（MT6771 无 dma-buf heap）
 #   fakecompat.so  —— 伪造 /proc/device-tree/compatible（可选，软解方案一般不用）
 #   fnacl_faccessat_hook.so —— 兼容飞牛私有 syscall：伪 dirfd(-21586) + struct 指针的 faccessat
+#   triminit_wait.so —— 缩短虚拟存储卷在开机时的恢复重试间隔
 #
 # 关于 fakecompat：
 #   原项目用它把 SoC 伪装成 rk3588 让 MPP 硬件编解码初始化。
@@ -23,7 +24,7 @@ cd "$(dirname "$0")"
 echo "=== 编译器: $CC ==="
 $CC --version | head -1
 
-for src in nodri nodmaheap fakecompat fnacl_faccessat_hook; do
+for src in nodri nodmaheap fakecompat fnacl_faccessat_hook triminit_wait; do
     echo "=== 编译 $src.so ==="
     $CC -shared -fPIC -O2 -o "${src}.so" "${src}.c" -ldl
 done

@@ -10,7 +10,7 @@ ConditionPathExists=/var/lib/postgresql/15/main/PG_VERSION
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/sbin/fnos-db-selfheal.sh
-# 脚本内部最长等待 60 + 90 + 60 秒
+# 限制数据库重试和补建流程的总启动时间。
 TimeoutStartSec=300
 
 [Install]

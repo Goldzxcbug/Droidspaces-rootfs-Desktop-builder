@@ -13,6 +13,7 @@ mkdir -p "$ROOT/opt/fnnas/hook"
 install -m 0755 "$HOOKS_DIR/nodri.so"                "$ROOT/opt/fnnas/hook/nodri.so"
 install -m 0755 "$HOOKS_DIR/nodmaheap.so"            "$ROOT/opt/fnnas/hook/nodmaheap.so"
 install -m 0755 "$HOOKS_DIR/fakecompat.so"           "$ROOT/opt/fnnas/hook/fakecompat.so"
+install -m 0755 "$HOOKS_DIR/triminit_wait.so"        "$ROOT/opt/fnnas/hook/triminit_wait.so"
 install -m 0755 "$HOOKS_DIR/fnacl_faccessat_hook.so" "$ROOT/opt/fnnas/fnacl_faccessat_hook.so"
 
 echo "--> [2/7] 安装 mediasrv 及动态硬解/软解 drop-in"
@@ -80,6 +81,10 @@ for unit in fnos-droidspaces-fixes.service fnos-block-view.service fnos-block-sy
     install -m 0644 "$ASSETS/systemd/$unit" "$ROOT/etc/systemd/system/$unit"
     ln -sfn "/etc/systemd/system/$unit" "$ROOT/etc/systemd/system/multi-user.target.wants/$unit"
 done
+
+mkdir -p "$ROOT/etc/systemd/system/trim_init.service.d"
+install -m 0644 "$ASSETS/systemd/trim-init-override.conf" \
+    "$ROOT/etc/systemd/system/trim_init.service.d/droidspaces-startup.conf"
 
 # PostgreSQL 开机重试：首次开机时 postgresql@15-main 可能与 fnOS 自身的
 # triminit 抢跑而瞬间失败（无任何日志），导致主库 trim 建不出来、

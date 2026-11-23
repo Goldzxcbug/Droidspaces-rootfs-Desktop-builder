@@ -87,19 +87,156 @@ ARG USERNAME=Gold
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 套用 Debian-13 的 Android 权限组（含 droidspaces-gpu，供 GPU 与 /dev/video32/33 VA-API 编解码使用）
-RUN grep -q '^aid_inet:' /etc/group      || echo 'aid_inet:x:3003:'      >> /etc/group && \
-    grep -q '^aid_net_raw:' /etc/group   || echo 'aid_net_raw:x:3004:'   >> /etc/group && \
-    grep -q '^aid_net_admin:' /etc/group || echo 'aid_net_admin:x:3005:' >> /etc/group && \
-    getent group droidspaces-gpu >/dev/null || groupadd -g 786 -r droidspaces-gpu && \
-    usermod -a -G aid_inet,aid_net_raw,input,video,tty,droidspaces-gpu root || true && \
-    (grep -q '^_apt:' /etc/passwd && usermod -g aid_inet _apt || true) && \
-    if [ -f /etc/adduser.conf ]; then \
-      sed -i '/^EXTRA_GROUPS=/d; /^ADD_EXTRA_GROUPS=/d' /etc/adduser.conf; \
-      echo 'ADD_EXTRA_GROUPS=1' >> /etc/adduser.conf; \
-      echo 'EXTRA_GROUPS="aid_inet aid_net_raw input video tty droidspaces-gpu"' >> /etc/adduser.conf; \
+# 强制配置使用 iptables-legacy（兼容 Android 内核，按 Debian 发行版保持一致）
+RUN if [ -x /usr/sbin/iptables-legacy ]; then \
+        update-alternatives --set iptables /usr/sbin/iptables-legacy || true; \
     fi && \
-    echo "Post-extraction fixes applied on $(date)" > /etc/droidspaces
+    if [ -x /usr/sbin/ip6tables-legacy ]; then \
+        update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy || true; \
+    fi
+
+# 修复容器内的 DHCP 网络服务配置（与 Debian-13 保持一致）
+RUN mkdir -p /etc/systemd/network && \
+    cat <<'EOF' > /etc/systemd/network/10-eth-dhcp.network
+[Match]
+Name=eth*
+
+[Network]
+DHCP=yes
+IPv6AcceptRA=yes
+
+[DHCPv4]
+UseDNS=yes
+UseDomains=yes
+RouteMetric=100
+EOF
+
+# 应用 Android 运行环境兼容性修复（按 Debian 12 方式与 Debian-13 保持一致，重点针对 Systemd、NAT 与 Udev）
+RUN <<'EOF_RUN'
+set -e
+
+# --- 1. 常规兼容性修复 ---
+grep -q '^aid_inet:' /etc/group      || echo 'aid_inet:x:3003:'      >> /etc/group
+grep -q '^aid_net_raw:' /etc/group   || echo 'aid_net_raw:x:3004:'   >> /etc/group
+grep -q '^aid_net_admin:' /etc/group || echo 'aid_net_admin:x:3005:' >> /etc/group
+
+getent group droidspaces-gpu >/dev/null || groupadd -g 786 -r droidspaces-gpu
+usermod -a -G aid_inet,aid_net_raw,input,video,tty,droidspaces-gpu root || true
+(grep -q '^_apt:' /etc/passwd && usermod -g aid_inet _apt || true)
+
+if [ -f /etc/adduser.conf ]; then
+    sed -i '/^EXTRA_GROUPS=/d; /^ADD_EXTRA_GROUPS=/d' /etc/adduser.conf
+    echo 'ADD_EXTRA_GROUPS=1' >> /etc/adduser.conf
+    echo 'EXTRA_GROUPS="aid_inet aid_net_raw input video tty droidspaces-gpu"' >> /etc/adduser.conf
+fi
+
+# --- 2. 针对 Systemd 的特定修复 ---
+ln -sf /dev/null /etc/systemd/system/systemd-networkd-wait-online.service
+ln -sf /dev/null /etc/systemd/system/systemd-journald-audit.socket
+
+cat >> /etc/systemd/journald.conf << 'EOT'
+[Journal]
+ReadKMsg=no
+Audit=no
+Storage=volatile
+EOT
+
+mkdir -p /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/ds-logging.conf << 'EOT'
+[Journal]
+SystemMaxUse=200M
+RuntimeMaxUse=200M
+MaxRetentionSec=7day
+MaxLevelStore=info
+EOT
+
+mkdir -p /etc/systemd/system/multi-user.target.wants
+GUEST_SYSTEMD_PATH="/lib/systemd/system"
+[ -d "$GUEST_SYSTEMD_PATH" ] || GUEST_SYSTEMD_PATH="/usr/lib/systemd/system"
+
+if [ -f "$GUEST_SYSTEMD_PATH/dbus.service" ]; then
+    ln -sf "$GUEST_SYSTEMD_PATH/dbus.service" "/etc/systemd/system/multi-user.target.wants/dbus.service"
+fi
+
+# 按其他发行版统一规则响应 ENABLE_yj_ARG（开启 NAT 和硬件识别）
+if [ "$ENABLE_yj_ARG" = "true" ]; then
+    for service in systemd-udevd.service systemd-resolved.service systemd-networkd.service NetworkManager.service; do
+        if [ -f "$GUEST_SYSTEMD_PATH/$service" ]; then
+            ln -sf "$GUEST_SYSTEMD_PATH/$service" "/etc/systemd/system/multi-user.target.wants/$service"
+        fi
+    done
+    # fnOS 默认 enable_hw_access=0 时无 udev，由 fnos-nat-dhcp.service 在 NAT 模式下兜底 DHCP
+    if [ -f /etc/systemd/system/fnos-nat-dhcp.service ]; then
+        ln -sf /etc/systemd/system/fnos-nat-dhcp.service /etc/systemd/system/multi-user.target.wants/fnos-nat-dhcp.service
+    fi
+else
+    for service in systemd-udevd.service systemd-resolved.service systemd-networkd.service NetworkManager.service; do
+        ln -sf /dev/null "/etc/systemd/system/$service"
+    done
+    rm -f /etc/systemd/system/multi-user.target.wants/fnos-nat-dhcp.service
+    ln -sf /dev/null /etc/systemd/system/fnos-nat-dhcp.service
+fi
+
+# 在 systemd-logind 中禁用电源键行为处理
+mkdir -p /etc/systemd/logind.conf.d
+cat > /etc/systemd/logind.conf.d/99-power-key.conf << 'EOF'
+[Login]
+HandlePowerKey=ignore
+HandleSuspendKey=ignore
+HandleHibernateKey=ignore
+HandlePowerKeyLongPress=ignore
+HandlePowerKeyLongPressHibernate=ignore
+EOF
+
+# 应用 udev 覆盖配置
+# 1. 触发器覆盖：限制 udevadm trigger 的扫描范围（防止全量扫描触发 Android 内核 panic）
+mkdir -p /etc/systemd/system/systemd-udev-trigger.service.d
+cat > /etc/systemd/system/systemd-udev-trigger.service.d/override.conf << 'EOF'
+[Service]
+ExecStart=
+ExecStart=-/usr/bin/udevadm trigger --subsystem-match=usb --subsystem-match=block --subsystem-match=input --subsystem-match=tty --subsystem-match=net
+EOF
+
+# 2. 清除只读路径检查（ConditionPathIsReadWrite），防止容器 /sys 只读导致 udev 被跳过
+for unit in systemd-udevd.service systemd-udev-trigger.service systemd-udev-settle.service systemd-udevd-kernel.socket systemd-udevd-control.socket; do
+    mkdir -p "/etc/systemd/system/${unit}.d"
+    printf "[Unit]\nConditionPathIsReadWrite=\n" > "/etc/systemd/system/${unit}.d/99-readonly-fix.conf"
+done
+
+# 仅在 NAT/Gateway 模式下允许启动网络管理服务，避免 Host Mode 破坏手机网络
+for unit in NetworkManager.service dhcpcd.service systemd-resolved.service systemd-networkd.service; do
+    if [ -f "$GUEST_SYSTEMD_PATH/$unit" ] || [ -f "/etc/systemd/system/multi-user.target.wants/$unit" ]; then
+        mkdir -p "/etc/systemd/system/${unit}.d"
+        cat > "/etc/systemd/system/${unit}.d/99-netmode-limit.conf" << 'EOF'
+[Service]
+ExecCondition=
+ExecCondition=/bin/sh -c "grep -qE 'net_mode=(nat|gateway)' /run/droidspaces/container.config"
+EOF
+    fi
+done
+
+# 仅在启用硬件访问（enable_hw_access=1）时允许启动 udev 相关服务
+for unit in systemd-udevd.service systemd-udev-trigger.service systemd-udev-settle.service; do
+    if [ -f "$GUEST_SYSTEMD_PATH/$unit" ] || [ -f "/etc/systemd/system/multi-user.target.wants/$unit" ]; then
+        mkdir -p "/etc/systemd/system/${unit}.d"
+        cat > "/etc/systemd/system/${unit}.d/99-hwaccess-limit.conf" << 'EOF'
+[Service]
+ExecCondition=
+ExecCondition=/bin/sh -c "grep -q 'enable_hw_access=1' /run/droidspaces/container.config"
+EOF
+    fi
+done
+
+# 针对 Android 环境微调日志轮转（logrotate）的最大容量限制
+if [ -f /etc/logrotate.conf ]; then
+    sed -i 's/^#maxsize.*/maxsize 50M/' /etc/logrotate.conf
+    if ! grep -q "maxsize 50M" /etc/logrotate.conf; then
+        echo "maxsize 50M" >> /etc/logrotate.conf
+    fi
+fi
+
+echo "Post-extraction fixes applied on $(date)" > /etc/droidspaces
+EOF_RUN
 
 # GPU / VA-API 适配：
 # - fnOS 当前底层为 Debian 12 (bookworm)，不兼容仅支持 Debian 13 的 install-mesa；

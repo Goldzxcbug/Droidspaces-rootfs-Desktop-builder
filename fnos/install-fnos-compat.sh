@@ -37,6 +37,7 @@ mkdir -p "$ROOT/usr/local/share/fnos-droidspaces/wrappers" "$ROOT/usr/local/sbin
 for w in mdadm-wrapper.sh mount-wrapper.sh sshfs-wrapper.sh lvcreate-wrapper.sh; do
     install -m 0755 "$ASSETS/wrappers/$w" "$ROOT/usr/local/share/fnos-droidspaces/wrappers/$w"
 done
+
 for s in fnos-droidspaces-fixes.sh fnos-trim-keygen.py fnos-block-view.sh fnos-md-alias.sh fnos-dm-sync.sh fnos-db-selfheal.sh; do
     install -m 0755 "$ASSETS/scripts/$s" "$ROOT/usr/local/sbin/$s"
 done
@@ -75,12 +76,15 @@ if [ -f "$ROOT/etc/lvm/lvm.conf" ]; then
 fi
 mkdir -p "$ROOT/vol1" "$ROOT/mnt"
 
-echo "--> [5/7] 安装并启用 systemd 服务（屏蔽容器不兼容服务）"
+echo "--> [5/7] 安装并启用 fnOS 专属 systemd 服务（通用 Droidspaces 限制由 fnOS.Dockerfile 统一配置）"
 mkdir -p "$ROOT/etc/systemd/system/multi-user.target.wants"
-for unit in fnos-droidspaces-fixes.service fnos-block-view.service fnos-block-sync.service fnos-db-selfheal.service; do
+for unit in fnos-droidspaces-fixes.service fnos-block-view.service fnos-block-sync.service \
+    fnos-db-selfheal.service; do
     install -m 0644 "$ASSETS/systemd/$unit" "$ROOT/etc/systemd/system/$unit"
     ln -sfn "/etc/systemd/system/$unit" "$ROOT/etc/systemd/system/multi-user.target.wants/$unit"
 done
+# 仅安装 fnos-nat-dhcp.service 单元文件；是否启用或屏蔽由 fnOS.Dockerfile 根据 ENABLE_yj_ARG 统一控制
+install -m 0644 "$ASSETS/systemd/fnos-nat-dhcp.service" "$ROOT/etc/systemd/system/fnos-nat-dhcp.service"
 
 mkdir -p "$ROOT/etc/systemd/system/trim_init.service.d"
 install -m 0644 "$ASSETS/systemd/trim-init-override.conf" \
@@ -98,57 +102,26 @@ RestartSec=3s
 TimeoutStartSec=120
 EOT
 
-# 屏蔽在 Android 容器下会导致报错/循环重启的服务
+# 屏蔽 fnOS 在 Android 容器下会导致报错/循环重启的专属服务
 ln -sfn /dev/null "$ROOT/etc/systemd/system/trim_trashbind.service"
-ln -sfn /dev/null "$ROOT/etc/systemd/system/systemd-networkd-wait-online.service"
-ln -sfn /dev/null "$ROOT/etc/systemd/system/systemd-journald-audit.socket"
 
-echo "--> [6/7] 套用 Droidspaces systemd/journald/logind/网络模式限制"
-cat >> "$ROOT/etc/systemd/journald.conf" <<'EOT'
-[Journal]
-ReadKMsg=no
-Audit=no
-Storage=volatile
-EOT
-
-mkdir -p "$ROOT/etc/systemd/journald.conf.d"
-cat > "$ROOT/etc/systemd/journald.conf.d/ds-logging.conf" <<'EOT'
-[Journal]
-SystemMaxUse=200M
-RuntimeMaxUse=200M
-MaxRetentionSec=7day
-MaxLevelStore=info
-EOT
-
-mkdir -p "$ROOT/etc/systemd/logind.conf.d"
-cat > "$ROOT/etc/systemd/logind.conf.d/99-power-key.conf" <<'EOF'
-[Login]
-HandlePowerKey=ignore
-HandleSuspendKey=ignore
-HandleHibernateKey=ignore
-HandlePowerKeyLongPress=ignore
-HandlePowerKeyLongPressHibernate=ignore
-EOF
-
-# 仅在 NAT/Gateway 模式下才允许启动网络管理服务，避免 Host Mode 破坏手机网络或覆盖 Droidspaces DNS
-for unit in NetworkManager.service dhcpcd.service systemd-resolved.service systemd-networkd.service; do
-    if [ -f "$ROOT/lib/systemd/system/$unit" ] || [ -f "$ROOT/usr/lib/systemd/system/$unit" ] || \
-       [ -e "$ROOT/etc/systemd/system/multi-user.target.wants/$unit" ]; then
-        mkdir -p "$ROOT/etc/systemd/system/${unit}.d"
-        cat > "$ROOT/etc/systemd/system/${unit}.d/99-netmode-limit.conf" <<'EOF'
-[Service]
-ExecCondition=
-ExecCondition=/bin/sh -c "grep -qE 'net_mode=(nat|gateway)' /run/droidspaces/container.config"
-EOF
-    fi
-done
-
+echo "--> [6/7] 配置 fnOS DNS 防覆盖保护（通用 systemd/udev/NAT 门控由 fnOS.Dockerfile 统一配置）"
 # 禁止 NetworkManager 覆盖 Droidspaces 管理的 /etc/resolv.conf
 mkdir -p "$ROOT/etc/NetworkManager/conf.d"
 cat > "$ROOT/etc/NetworkManager/conf.d/99-no-dns.conf" <<'NMCONF'
 [main]
 dns=none
 NMCONF
+
+# Debian 的 dhclient-script 会加载此钩子，继续应用 DHCP 地址和路由，但不覆盖 /etc/resolv.conf。
+mkdir -p "$ROOT/etc/dhcp/dhclient-enter-hooks.d"
+cat > "$ROOT/etc/dhcp/dhclient-enter-hooks.d/zz-fnos-nat-dns" <<'DHCPHOOK'
+#!/bin/sh
+if [ "${FNOS_NAT_DHCP:-}" = 1 ] && [ "${interface:-}" = eth0 ]; then
+    make_resolv_conf() { :; }
+fi
+DHCPHOOK
+chmod 0755 "$ROOT/etc/dhcp/dhclient-enter-hooks.d/zz-fnos-nat-dns"
 
 echo "--> [7/7] 清理物理机 fstab（DNS 交由 Droidspaces container.config 管理）"
 cat > "$ROOT/etc/fstab" <<'FSTAB'

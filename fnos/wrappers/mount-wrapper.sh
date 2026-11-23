@@ -1,5 +1,5 @@
 #!/bin/bash
-# 过滤飞牛私有挂载参数 trimacl，保留 prjquota 等标准参数
+# 准备飞牛存储卷的挂载目录，过滤私有参数 trimacl 并保留 prjquota
 REAL=/usr/bin/mount.orig
 [ -x "$REAL" ] || { echo "mount wrapper: $REAL not found" >&2; exit 127; }
 
@@ -29,5 +29,16 @@ while (($#)); do
         shift
     fi
 done
+
+# fnOS 把块设备与 /volN 作为最后两个参数传入。挂载目录可能已被清理，
+# 在交给真实 mount 前补齐，首次挂载和重新挂载都走这里。
+if ((${#ARGS[@]} >= 2)); then
+    source="${ARGS[-2]}"
+    target="${ARGS[-1]}"
+    if [[ "$target" =~ ^/vol[1-9][0-9]*$ && "$source" == /dev/* && -b "$source" &&
+          ! -e "$target" && ! -L "$target" ]]; then
+        mkdir -p -- "$target" || exit "$?"
+    fi
+fi
 
 exec "$REAL" "${ARGS[@]}"

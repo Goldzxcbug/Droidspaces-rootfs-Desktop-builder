@@ -11,6 +11,10 @@ MAP_FILE="$VIEW_ROOT/disk-map"
 [ -d "$BLK_DIR" ] || exit 0
 [ -f "$MAP_FILE" ] || exit 0
 
+# 后台刷新与 mdadm 同步更新时共用一把锁，避免交叉清理成员目录。
+exec 9>"$VIEW_ROOT/md-alias.lock"
+flock -x 9 || exit 1
+
 # 读取映射表：loopN -> sdX
 declare -A LOOP_TO_SD=()
 while read -r loop_name sd_name _rest; do
@@ -40,6 +44,7 @@ map_member_name() {
     return 1
 }
 
+declare -A md_members=() slaves=()
 for idx in $(seq 0 15); do
     md_name="md${idx}"
     src="/sys/devices/virtual/block/${md_name}"
@@ -63,35 +68,44 @@ for idx in $(seq 0 15); do
     # md/ 目录：将 dev-loopNpK 映射为 dev-sdXK
     if [ -d "$src/md" ]; then
         mkdir -p "$dst/md"
-        # 清理失效的 dev-* 目录
-        for old in "$dst/md"/dev-*; do
-            [ -e "$old" ] || [ -L "$old" ] || continue
-            rm -rf "$old"
-        done
+        md_members=()
         for mentry in "$src/md"/*; do
             [ -e "$mentry" ] || [ -L "$mentry" ] || continue
             mbase="$(basename "$mentry")"
             if [[ "$mbase" == dev-* ]]; then
                 raw_dev="${mbase#dev-}"
                 if mapped="$(map_member_name "$raw_dev")"; then
-                    mkdir -p "$dst/md/dev-${mapped}"
+                    mbase="dev-${mapped}"
+                    if [ -L "$dst/md/$mbase" ]; then
+                        rm -f "$dst/md/$mbase"
+                    fi
+                    mkdir -p "$dst/md/$mbase"
                     for sub in "$mentry"/*; do
                         [ -e "$sub" ] || [ -L "$sub" ] || continue
-                        ln -sfn "$sub" "$dst/md/dev-${mapped}/$(basename "$sub")"
+                        ln -sfn "$sub" "$dst/md/$mbase/$(basename "$sub")"
                     done
                 else
+                    if [ -d "$dst/md/$mbase" ] && [ ! -L "$dst/md/$mbase" ]; then
+                        rm -rf "$dst/md/$mbase"
+                    fi
                     ln -sfn "$mentry" "$dst/md/$mbase"
                 fi
+                md_members["$mbase"]=1
             else
                 ln -sfn "$mentry" "$dst/md/$mbase"
             fi
+        done
+        # 保留现有成员目录，避免 fnOS 校验时看见短暂的空视图。
+        for old in "$dst/md"/dev-*; do
+            [ -e "$old" ] || [ -L "$old" ] || continue
+            [ -n "${md_members[${old##*/}]:-}" ] || rm -rf "$old"
         done
     fi
 
     # slaves/ 目录：将 loopNpK 映射为 sdXK（fnOS 靠它判断盘归属）
     if [ -d "$src/slaves" ]; then
         mkdir -p "$dst/slaves"
-        rm -f "$dst/slaves"/*
+        slaves=()
         for sentry in "$src/slaves"/*; do
             [ -e "$sentry" ] || [ -L "$sentry" ] || continue
             sbase="$(basename "$sentry")"
@@ -104,8 +118,14 @@ for idx in $(seq 0 15); do
                     ln -sfn "$sentry" "$dst/slaves/${mapped}"
                 fi
             else
+                mapped="$sbase"
                 ln -sfn "$sentry" "$dst/slaves/$sbase"
             fi
+            slaves["$mapped"]=1
+        done
+        for old in "$dst/slaves"/*; do
+            [ -L "$old" ] || continue
+            [ -n "${slaves[${old##*/}]:-}" ] || rm -f "$old"
         done
     fi
 

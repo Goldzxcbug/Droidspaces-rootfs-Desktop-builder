@@ -104,11 +104,11 @@ RUN grep -q '^aid_inet:' /etc/group      || echo 'aid_inet:x:3003:'      >> /etc
 # GPU 适配（套用 Debian-13.Dockerfile 的 Mesa KGSL 逻辑；开启后自动配合 droidspaces-video VA-API）
 RUN if [ "$ENABLE_mesa_ARG" = "true" ]; then \
       echo "--> [开启] 正在安装 Mesa KGSL 驱动（套用 Debian-13 方案）..." && \
-      cat <<'EOF' >> /etc/environment
-MESA_LOADER_DRIVER_OVERRIDE=kgsl
-TU_DEBUG=noconform
-LIBVA_DRIVER_NAME=msm_drm
-EOF
+      printf '%s\n' \
+        'MESA_LOADER_DRIVER_OVERRIDE=kgsl' \
+        'TU_DEBUG=noconform' \
+        'LIBVA_DRIVER_NAME=msm_drm' \
+        >> /etc/environment && \
       /usr/local/sbin/install-mesa --1; \
     else \
       echo "--> [跳过] 未开启 Mesa 驱动安装（启动后也可通过 droidspaces-gpu / droidspaces-video.sh 随时安装）"; \

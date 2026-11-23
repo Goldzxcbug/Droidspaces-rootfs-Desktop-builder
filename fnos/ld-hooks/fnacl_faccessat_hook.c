@@ -29,6 +29,7 @@
  */
 
 #include <dlfcn.h>
+#include <mntent.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -42,6 +43,7 @@
 #include <linux/stat.h>
 
 #define FNACL_PATH_MAX 4096
+#define FNACL_MOUNTPOINT_DFD (-21581)
 
 typedef int (*faccessat_fn)(int, const char *, int, int);
 typedef int (*unlinkat_fn)(int, const char *, int);
@@ -143,6 +145,53 @@ static const char *resolve_faccessat(const char *p)
 	return to_abs(p);
 }
 
+/* libnfile 的 is_mountpoint 将这个私有 faccessat 的非零结果视为已挂载。 */
+static int check_mountpoint(const char *path, int flags)
+{
+	struct statx info;
+	struct mntent entry;
+	char buffer[8192];
+	char *resolved;
+	FILE *mounts;
+	int mounted = 0;
+
+	flags &= AT_SYMLINK_NOFOLLOW;
+	if (statx(AT_FDCWD, path, flags, STATX_TYPE, &info) == 0) {
+		if (info.stx_attributes_mask & STATX_ATTR_MOUNT_ROOT)
+			return (info.stx_attributes & STATX_ATTR_MOUNT_ROOT) != 0;
+	} else if (errno == ENOENT || errno == ENOTDIR) {
+		return 0;
+	}
+
+	/* 运行旧内核时，使用当前进程的挂载表判断，包括 bind mount。 */
+	if (flags & AT_SYMLINK_NOFOLLOW) {
+		struct stat st;
+
+		if (lstat(path, &st) == 0 && S_ISLNK(st.st_mode))
+			return 0;
+	}
+	resolved = realpath(path, NULL);
+	if (!resolved)
+		return (errno == ENOENT || errno == ENOTDIR) ? 0 : -1;
+
+	mounts = setmntent("/proc/self/mounts", "r");
+	if (!mounts) {
+		free(resolved);
+		return -1;
+	}
+	while (getmntent_r(mounts, &entry, buffer, sizeof(buffer))) {
+		if (strcmp(entry.mnt_dir, resolved) == 0) {
+			mounted = 1;
+			break;
+		}
+	}
+	if (ferror(mounts))
+		mounted = -1;
+	endmntent(mounts);
+	free(resolved);
+	return mounted;
+}
+
 /* ---------------- faccessat ---------------- */
 
 int faccessat(int dfd, const char *pathname, int mode, int flags)
@@ -150,6 +199,9 @@ int faccessat(int dfd, const char *pathname, int mode, int flags)
 	static faccessat_fn real;
 	const char *real_path;
 	int ret, saved;
+
+	if (dfd == FNACL_MOUNTPOINT_DFD)
+		return check_mountpoint(to_abs(pathname), flags);
 
 	if (!real)
 		real = (faccessat_fn)dlsym(RTLD_NEXT, "faccessat");

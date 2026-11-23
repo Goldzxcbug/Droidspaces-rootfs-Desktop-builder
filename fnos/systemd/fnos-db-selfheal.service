@@ -1,0 +1,17 @@
+[Unit]
+Description=Droidspaces fnOS database self-heal (PostgreSQL + trim database)
+# 只依赖 postgresql.service，不 After=trim_init.service：
+# triminit 在 PG 没起来时会长时间重试，必须让本单元更早介入。
+After=postgresql.service fnos-droidspaces-fixes.service
+Wants=postgresql.service
+ConditionPathExists=/var/lib/postgresql/15/main/PG_VERSION
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/fnos-db-selfheal.sh
+# 脚本内部最长等待 60 + 90 + 60 秒
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

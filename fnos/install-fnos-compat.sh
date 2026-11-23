@@ -36,7 +36,7 @@ mkdir -p "$ROOT/usr/local/share/fnos-droidspaces/wrappers" "$ROOT/usr/local/sbin
 for w in mdadm-wrapper.sh mount-wrapper.sh sshfs-wrapper.sh lvcreate-wrapper.sh; do
     install -m 0755 "$ASSETS/wrappers/$w" "$ROOT/usr/local/share/fnos-droidspaces/wrappers/$w"
 done
-for s in fnos-droidspaces-fixes.sh fnos-trim-keygen.py fnos-block-view.sh fnos-md-alias.sh fnos-dm-sync.sh; do
+for s in fnos-droidspaces-fixes.sh fnos-trim-keygen.py fnos-block-view.sh fnos-md-alias.sh fnos-dm-sync.sh fnos-db-selfheal.sh; do
     install -m 0755 "$ASSETS/scripts/$s" "$ROOT/usr/local/sbin/$s"
 done
 
@@ -76,10 +76,22 @@ mkdir -p "$ROOT/vol1" "$ROOT/mnt"
 
 echo "--> [5/7] 安装并启用 systemd 服务（屏蔽容器不兼容服务）"
 mkdir -p "$ROOT/etc/systemd/system/multi-user.target.wants"
-for unit in fnos-droidspaces-fixes.service fnos-block-view.service fnos-block-sync.service; do
+for unit in fnos-droidspaces-fixes.service fnos-block-view.service fnos-block-sync.service fnos-db-selfheal.service; do
     install -m 0644 "$ASSETS/systemd/$unit" "$ROOT/etc/systemd/system/$unit"
     ln -sfn "/etc/systemd/system/$unit" "$ROOT/etc/systemd/system/multi-user.target.wants/$unit"
 done
+
+# PostgreSQL 开机重试：首次开机时 postgresql@15-main 可能与 fnOS 自身的
+# triminit 抢跑而瞬间失败（无任何日志），导致主库 trim 建不出来、
+# 所有 fnOS 服务报「初始化数据库失败」。这里让它失败后自动重试，
+# 再由 fnos-db-selfheal.service 兜底校验/补建 trim 库。
+mkdir -p "$ROOT/etc/systemd/system/postgresql@15-main.service.d"
+cat > "$ROOT/etc/systemd/system/postgresql@15-main.service.d/droidspaces-retry.conf" <<'EOT'
+[Service]
+Restart=on-failure
+RestartSec=3s
+TimeoutStartSec=120
+EOT
 
 # 屏蔽在 Android 容器下会导致报错/循环重启的服务
 ln -sfn /dev/null "$ROOT/etc/systemd/system/trim_trashbind.service"

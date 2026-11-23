@@ -79,11 +79,11 @@ main() {
             case "$VERSION_ID" in 24.04|25.10) full_anland=false ;; esac
             install_file nosnap.sh /usr/local/sbin/nosnap
             ;;
-        debian|fedora|arch|archarm|archlinux) ;;
+        debian|fnos|trim|fedora|arch|archarm|archlinux) ;;
         *) die "unsupported target distribution: $ID" ;;
     esac
     case "$ID" in
-        debian|ubuntu)
+        debian|fnos|trim|ubuntu)
             install_file download-firmware /usr/local/bin/download-firmware
             install_file bashrc.sh /etc/profile.d/ds-aliases.sh
             ;;

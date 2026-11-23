@@ -48,7 +48,7 @@ display_backend_label() {
 
 target_is_known() {
     case "${1:-}" in
-        Debian-13|Ubuntu-24|Ubuntu-25|Ubuntu-26|Fedora-43|Fedora-44|Fedora-45|Arch) return 0 ;;
+        Debian-13|Ubuntu-24|Ubuntu-25|Ubuntu-26|Fedora-43|Fedora-44|Fedora-45|Arch|fnOS) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -59,7 +59,13 @@ desktop_target_supported() {
 
     target_is_known "$target" || return 1
     case "$desktop" in
-        none|kde) return 0 ;;
+        none) return 0 ;;
+        kde)
+            case "$target" in
+                fnOS) return 1 ;;
+                *) return 0 ;;
+            esac
+            ;;
         kde-mobile)
             case "$target" in
                 Debian-13|Ubuntu-26|Fedora-43|Fedora-44|Fedora-45|Arch) return 0 ;;

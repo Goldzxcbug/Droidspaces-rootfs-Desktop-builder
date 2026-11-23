@@ -3,7 +3,7 @@
 write_rootfs_config() {
     local output="${1:?}" desktop="${2:?}" backend="${3:?}"
     local audio="${4:?}" docker_enabled="${5:?}" gpu_enabled="${6:?}"
-    local zh_tz_enabled="${7:-false}"
+    local zh_tz_enabled="${7:-false}" target_name="${8:-}"
     local anland=0 x11=0 pulse=0 userns=0 gpu=0
 
     case "$desktop" in none|kde|kde-mobile|gnome|anland-next|niri|hyprland|mango|denial) ;; *) return 1 ;; esac
@@ -18,13 +18,20 @@ write_rootfs_config() {
     [[ "$backend" == x11 && "$audio" == socket ]] && pulse=1
     [[ "$desktop" == kde || "$desktop" == kde-mobile ]] && userns=1
     [[ "$gpu_enabled" == true ]] && gpu=1
+    [[ "$target_name" == fnOS ]] && x11=0
 
     {
         printf '%s\n' '# Droidspaces 推荐配置'
         printf 'enable_anland=%s\nenable_termux_x11=%s\nenable_pulseaudio=%s\n' "$anland" "$x11" "$pulse"
         printf 'allow_userns=%s\nenable_gpu_mode=%s\n' "$userns" "$gpu"
+        if [[ "$target_name" == fnOS ]]; then
+            printf '%s\n' 'enable_hw_access=0'
+            printf '%s\n' 'privileged=nomask,nocaps'
+        fi
         if [[ "$zh_tz_enabled" == true ]]; then
             printf '%s\n' 'dns_servers=114.114.114.114'
+        elif [[ "$target_name" == fnOS ]]; then
+            printf '%s\n' 'dns_servers=8.8.8.8'
         fi
         if [[ "$docker_enabled" == true ]]; then
             printf '%s\n' 'net_mode=nat'

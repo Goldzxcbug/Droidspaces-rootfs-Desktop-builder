@@ -1,0 +1,13 @@
+[Unit]
+Description=Droidspaces fnOS synthetic sysfs block view watcher
+After=fnos-block-view.service
+ConditionPathExists=/run/fnos-block-view/disk-map
+
+[Service]
+Type=simple
+ExecStart=/bin/sh -c 'while :; do /usr/local/sbin/fnos-block-view.sh --refresh; sleep 1; done'
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

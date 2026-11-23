@@ -1,0 +1,12 @@
+[Unit]
+Description=Droidspaces fnOS virtual block view (/mnt/fn-*.img -> /sys/block/sd*)
+After=basic.target fnos-droidspaces-fixes.service
+Before=trim_main.service filestor_service.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/fnos-block-view.sh
+
+[Install]
+WantedBy=multi-user.target

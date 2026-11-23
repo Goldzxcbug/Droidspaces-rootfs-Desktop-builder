@@ -219,7 +219,7 @@ docker buildx build \
 
 echo "正在写入推荐配置并压缩构建产物..."
 package_rootfs_with_config "$TEMP_TAR" "$FINAL_NAME" "$DESKTOP" "$DISPLAY_BACKEND" \
-  "${PulseAudio:-none}" "${ENABLE_docker:-false}" "${ENABLE_mesa:-false}" "${ENABLE_zh_tz:-false}"
+  "${PulseAudio:-none}" "${ENABLE_docker:-false}" "${ENABLE_mesa:-false}" "${ENABLE_zh_tz:-false}" "$PREFIX"
 
 echo "========================================================="
 echo " 恭喜！构建成功完成: $FINAL_NAME"

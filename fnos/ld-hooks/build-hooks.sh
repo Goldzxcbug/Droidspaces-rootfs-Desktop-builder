@@ -7,6 +7,7 @@
 #   fakecompat.so  —— 伪造 /proc/device-tree/compatible（可选，软解方案一般不用）
 #   fnacl_faccessat_hook.so —— 兼容飞牛私有 syscall：伪 dirfd(-21586) + struct 指针的 faccessat
 #   triminit_wait.so —— 缩短虚拟存储卷在开机时的恢复重试间隔
+#   network_veth.so —— 让飞牛网络服务识别 NAT 的 eth0
 #
 # 关于 fakecompat：
 #   原项目用它把 SoC 伪装成 rk3588 让 MPP 硬件编解码初始化。
@@ -24,7 +25,7 @@ cd "$(dirname "$0")"
 echo "=== 编译器: $CC ==="
 $CC --version | head -1
 
-for src in nodri nodmaheap fakecompat fnacl_faccessat_hook triminit_wait; do
+for src in nodri nodmaheap fakecompat fnacl_faccessat_hook triminit_wait network_veth; do
     echo "=== 编译 $src.so ==="
     $CC -shared -fPIC -O2 -o "${src}.so" "${src}.c" -ldl
 done

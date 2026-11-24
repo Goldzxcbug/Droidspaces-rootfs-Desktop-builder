@@ -1,46 +1,126 @@
 # syntax=docker/dockerfile:1.7
 # fnOS.Dockerfile — 构建适用于 Droidspaces 的飞牛 fnOS ARM64 RootFS
 #
-# 阶段 1（BUILDPLATFORM 原生，零 QEMU）：下载/解压 trimfs.tgz、交叉编译 hooks、注入兼容层与 Droidspaces TUI 工具链
+# 阶段 1（BUILDPLATFORM 原生，零 QEMU）：从飞牛官方 ARM ISO 提取并解压 trimfs.tgz、交叉编译 hooks、注入兼容层与 Droidspaces TUI 工具链
 # 阶段 2/3（arm64 目标架构）：补齐 Android 权限组（含 droidspaces-gpu），可选按 Debian-13 方式安装 Mesa KGSL GPU 驱动
 # 阶段 4（scratch AS export）：导出干净 rootfs 供 buildx --target export 使用
 
 FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS builder
 
-ARG TRIMFS_URL=https://github.com/kesry/mainline-linux-mt6771/releases/download/source/trimfs.tgz
-ARG TRIMLIB_URL=https://github.com/kesry/mainline-linux-mt6771/releases/download/source/trim-media-lib.zip
+# 默认自动从飞牛官网 ARM 下载页解析最新 UEFI ARM ISO (armsr) 直链并提取 trimfs.tgz；
+# 也可通过 --build-arg FNOS_ISO_URL=... 指定固定 ISO 链接，或传入 TRIMFS_URL=... 直接下载 trimfs.tgz
+ARG FNOS_ISO_URL=auto
+ARG FNOS_ISO_MD5=
+ARG FNOS_FALLBACK_ISO_URL=http://thunder.liveupdate.fnnas.com:8080/arm/iso/armsr/fnos_Mainland-PE_arm_1.2.1011_armsr_3133.iso
+ARG FNOS_FALLBACK_ISO_MD5=1e2073528f7ffee774012a6a9646bd98
+ARG TRIMFS_URL=
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. 安装构建工具（原生架构交叉编译 aarch64 hooks + 解包工具）
+# 1. 安装构建工具（原生架构交叉编译 aarch64 hooks + ISO/压缩包解包工具）
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-      bash ca-certificates curl gzip p7zip-full tar xz-utils \
+      bash ca-certificates curl gzip p7zip-full python3 tar xz-utils \
       gcc-aarch64-linux-gnu libc6-dev-arm64-cross binutils-aarch64-linux-gnu && \
     rm -rf /var/lib/apt/lists/*
 
-# 2. 下载并校验飞牛 ARM rootfs (trimfs.tgz) 与媒体服务包 (trim-media-lib.zip)
-#    单独成层，便于 BuildKit 缓存 1.9GB 素材
-RUN mkdir -p /work/dl /rootfs /work/trimmedia && \
-    for attempt in 1 2 3; do \
-      echo "--> 下载 trimfs.tgz (尝试 ${attempt}/3)..."; \
-      rm -f /work/dl/trimfs.tgz; \
-      curl -fL --retry 5 --retry-delay 3 --connect-timeout 30 --max-time 900 \
-        -o /work/dl/trimfs.tgz "${TRIMFS_URL}" && \
-      gzip -t /work/dl/trimfs.tgz && break; \
-      echo "--> 下载不完整或校验失败，重试..."; \
-    done && \
-    gzip -t /work/dl/trimfs.tgz && \
-    echo "--> 解压 trimfs.tgz 到 /rootfs..." && \
-    tar --numeric-owner --exclude='./dev/*' --exclude='dev/*' -xzf /work/dl/trimfs.tgz -C /rootfs && \
-    mkdir -p /rootfs/dev && \
-    test -f /rootfs/etc/os-release && \
-    rm -f /work/dl/trimfs.tgz && \
-    echo "--> 下载并解压 trim-media-lib.zip..." && \
-    curl -fsSL --retry 3 -o /work/dl/trim-media-lib.zip "${TRIMLIB_URL}" && \
-    7z x -y -o/work/trimmedia /work/dl/trim-media-lib.zip >/dev/null && \
-    test -f /work/trimmedia/bin/mediasrv && \
-    rm -f /work/dl/trim-media-lib.zip
+# 2. 从飞牛官方 ARM ISO 获取并校验飞牛 ARM rootfs (trimfs.tgz)
+#    单独成层，便于 BuildKit 缓存素材
+RUN <<'EOF_DL'
+#!/bin/bash
+set -euo pipefail
+
+mkdir -p /work/dl /rootfs
+
+if [ -n "${TRIMFS_URL}" ]; then
+    for attempt in 1 2 3; do
+        echo "--> 直接下载 trimfs.tgz (尝试 ${attempt}/3): ${TRIMFS_URL}"
+        rm -f /work/dl/trimfs.tgz
+        curl -fL --retry 5 --retry-delay 3 --connect-timeout 30 --max-time 900 \
+            -o /work/dl/trimfs.tgz "${TRIMFS_URL}" && \
+        gzip -t /work/dl/trimfs.tgz && break
+        echo "--> 下载不完整或校验失败，重试..."
+    done
+    gzip -t /work/dl/trimfs.tgz
+else
+    ISO_URL="${FNOS_ISO_URL}"
+    ISO_MD5="${FNOS_ISO_MD5}"
+
+    if [ "${ISO_URL}" = "auto" ]; then
+        echo "--> 正在从飞牛官网解析最新 UEFI ARM ISO (armsr) 下载地址..."
+        if curl -fsSL --retry 3 --connect-timeout 20 --max-time 60 \
+            https://www.fnnas.com/download-arm -o /work/dl/download-arm.html; then
+            RESOLVED="$(python3 - /work/dl/download-arm.html <<'PY' || true
+import base64, re, sys
+html = open(sys.argv[1], encoding="utf-8", errors="ignore").read().replace('\\"', '"')
+for blk in re.findall(r'\{[^{}]*armsr/[^{}]*\.iso[^{}]*\}', html):
+    tm = re.search(r'"thunder":"thunder://([A-Za-z0-9+/=]+)"', blk)
+    hm = re.search(r'"hash":"([0-9a-fA-F]{32})"', blk)
+    if not tm:
+        continue
+    raw = base64.b64decode(tm.group(1)).decode("utf-8", errors="ignore")
+    if raw.startswith("AA") and raw.endswith("ZZ"):
+        url = raw[2:-2]
+        md5 = hm.group(1).lower() if hm else ""
+        print(f"{url}\t{md5}")
+        sys.exit(0)
+sys.exit(1)
+PY
+)"
+            rm -f /work/dl/download-arm.html
+            if [ -n "${RESOLVED}" ]; then
+                ISO_URL="${RESOLVED%%	*}"
+                [ -z "${ISO_MD5}" ] && ISO_MD5="${RESOLVED#*	}"
+                echo "--> 解析到官方 ARM ISO: ${ISO_URL}"
+                [ -n "${ISO_MD5}" ] && echo "--> 官方 ISO MD5: ${ISO_MD5}"
+            fi
+        fi
+
+        if [ -z "${ISO_URL}" ] || [ "${ISO_URL}" = "auto" ]; then
+            echo "--> [提示] 官网动态解析失败，回退至内置官方 ARM ISO 直链"
+            ISO_URL="${FNOS_FALLBACK_ISO_URL}"
+            [ -z "${ISO_MD5}" ] && ISO_MD5="${FNOS_FALLBACK_ISO_MD5}"
+        fi
+    fi
+
+    ISO_OK=0
+    for attempt in 1 2 3; do
+        echo "--> 下载飞牛官方 ARM ISO (尝试 ${attempt}/3): ${ISO_URL}"
+        if curl -fL -C - --retry 5 --retry-delay 3 --connect-timeout 30 --max-time 1800 \
+            -o /work/dl/fnos-arm.iso "${ISO_URL}"; then
+            if [ -n "${ISO_MD5}" ]; then
+                echo "--> 校验 ISO MD5 (${ISO_MD5})..."
+                if echo "${ISO_MD5}  /work/dl/fnos-arm.iso" | md5sum -c -; then
+                    ISO_OK=1
+                    break
+                else
+                    echo "--> ISO MD5 校验失败，删除后重试..."
+                    rm -f /work/dl/fnos-arm.iso
+                fi
+            else
+                ISO_OK=1
+                break
+            fi
+        else
+            echo "--> ISO 下载中断，重试..."
+        fi
+    done
+
+    [ "${ISO_OK}" = "1" ] || { echo "--> 飞牛官方 ARM ISO 下载或校验失败" >&2; exit 1; }
+
+    echo "--> 从官方 ARM ISO 提取 trimfs.tgz..."
+    7z e -y -o/work/dl /work/dl/fnos-arm.iso trimfs.tgz >/dev/null
+    rm -f /work/dl/fnos-arm.iso
+    test -f /work/dl/trimfs.tgz
+    gzip -t /work/dl/trimfs.tgz
+fi
+
+echo "--> 解压 trimfs.tgz 到 /rootfs..."
+tar --numeric-owner --exclude='./dev/*' --exclude='dev/*' -xzf /work/dl/trimfs.tgz -C /rootfs
+mkdir -p /rootfs/dev
+test -f /rootfs/etc/os-release
+rm -f /work/dl/trimfs.tgz
+EOF_DL
 
 # 3. 注入 Droidspaces TUI / GPU / Video 工具链（含 droidspaces-tui、droidspaces-gpu、droidspaces-video.sh、install-mesa）
 RUN --mount=type=bind,source=scripts,target=/run/droidspaces-scripts \
@@ -56,7 +136,7 @@ RUN --mount=type=bind,source=fnos,target=/run/fnos \
     mkdir -p /work/hooks && \
     cp -a /run/fnos/ld-hooks/. /work/hooks/ && \
     bash /work/hooks/build-hooks.sh aarch64-linux-gnu-gcc && \
-    bash /run/fnos/install-fnos-compat.sh /rootfs /run/fnos /work/hooks /work/trimmedia
+    bash /run/fnos/install-fnos-compat.sh /rootfs /run/fnos /work/hooks
 
 # =====================================================================
 # 阶段 2 & 3：arm64 目标环境定制（Android 权限组 + 可选 Mesa KGSL GPU 驱动）

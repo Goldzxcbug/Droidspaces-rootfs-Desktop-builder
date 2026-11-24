@@ -1,12 +1,11 @@
 #!/bin/bash
 # install-fnos-compat.sh — 将 Droidspaces + 主线内核兼容层注入解压后的 fnOS rootfs
-# 用法：install-fnos-compat.sh <rootfs_dir> <fnos_assets_dir> <hooks_build_dir> <trimmedia_dir>
+# 用法：install-fnos-compat.sh <rootfs_dir> <fnos_assets_dir> <hooks_build_dir>
 set -euo pipefail
 
 ROOT="${1:?missing rootfs dir}"
 ASSETS="${2:?missing fnos assets dir}"
 HOOKS_DIR="${3:?missing compiled hooks dir}"
-TRIMMEDIA_DIR="${4:?missing extracted trimmedia dir}"
 
 echo "--> [1/7] 安装 LD_PRELOAD 拦截库"
 mkdir -p "$ROOT/opt/fnnas/hook"
@@ -17,11 +16,7 @@ install -m 0755 "$HOOKS_DIR/triminit_wait.so"        "$ROOT/opt/fnnas/hook/trimi
 install -m 0755 "$HOOKS_DIR/network_veth.so"         "$ROOT/opt/fnnas/hook/network_veth.so"
 install -m 0755 "$HOOKS_DIR/fnacl_faccessat_hook.so" "$ROOT/opt/fnnas/fnacl_faccessat_hook.so"
 
-echo "--> [2/7] 安装 mediasrv 及动态硬解/软解 drop-in"
-mkdir -p "$ROOT/opt/trimmedia"
-cp -a "$TRIMMEDIA_DIR"/. "$ROOT/opt/trimmedia/"
-chmod +x "$ROOT/opt/trimmedia/bin/mediasrv"
-
+echo "--> [2/7] 配置系统原版 mediasrv 动态硬解/软解 drop-in"
 mkdir -p "$ROOT/etc/systemd/system/mediasrv.service.d"
 install -m 0644 "$ASSETS/systemd/mediasrv-override.conf" \
     "$ROOT/etc/systemd/system/mediasrv.service.d/override.conf"

@@ -30,11 +30,14 @@ for src in nodri nodmaheap fakecompat fnacl_faccessat_hook triminit_wait network
     $CC -shared -fPIC -O2 -o "${src}.so" "${src}.c" -ldl
 done
 
+echo "=== 编译 fnos-appcenter-perm ==="
+$CC -O2 -Wall -Wextra -o fnos-appcenter-perm fnos-appcenter-perm.c
+
 echo "=== 结果 ==="
-ls -lh *.so
+ls -lh *.so fnos-appcenter-perm
 
 echo "=== 架构确认（必须 AArch64）==="
-for so in *.so; do
-    printf "  %-18s " "$so"
-    readelf -h "$so" 2>/dev/null | grep Machine || echo "(读不到)"
+for bin in *.so fnos-appcenter-perm; do
+    printf "  %-24s " "$bin"
+    readelf -h "$bin" 2>/dev/null | grep Machine || echo "(读不到)"
 done

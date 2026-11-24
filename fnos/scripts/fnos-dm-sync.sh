@@ -29,6 +29,16 @@ for src in /sys/devices/virtual/block/dm-*; do
             ln -sfn "$dst" "$DEV_DIR/$devnum"
             major="${devnum%%:*}"
             minor="${devnum##*:}"
+            if [ -b "/dev/$name" ]; then
+                cur_hex="$(stat -c '%t:%T' "/dev/$name" 2>/dev/null || true)"
+                if [ -n "$cur_hex" ]; then
+                    cur_maj=$((16#${cur_hex%%:*}))
+                    cur_min=$((16#${cur_hex##*:}))
+                    if [ "$cur_maj" != "$major" ] || [ "$cur_min" != "$minor" ]; then
+                        rm -f "/dev/$name" 2>/dev/null || true
+                    fi
+                fi
+            fi
             if [ ! -b "/dev/$name" ]; then
                 mknod -m 660 "/dev/$name" b "$major" "$minor" 2>/dev/null || true
             fi

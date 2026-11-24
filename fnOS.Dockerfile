@@ -340,6 +340,13 @@ RUN if [ "$ENABLE_mesa_ARG" = "true" ]; then \
       echo "--> [跳过] 未开启 GPU/VA-API 透传配置"; \
     fi
 
+# 预装 fuse-overlayfs：规避部分 Android 内核 overlayfs 对非 CAP_SYS_ADMIN 容器进程的写拦截，
+# 配合 docker.service.d/droidspaces-storage-driver.conf 实现 Docker 开箱即用
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends fuse-overlayfs && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
 # 清理仅用于桌面构建的一次性脚本（保留 droidspaces-tui、droidspaces-gpu、droidspaces-video.sh、install-mesa）
 RUN rm -f \
       /usr/local/sbin/configure-chrome \

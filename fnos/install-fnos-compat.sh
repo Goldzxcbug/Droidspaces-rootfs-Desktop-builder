@@ -37,6 +37,7 @@ done
 for s in fnos-droidspaces-fixes.sh fnos-trim-keygen.py fnos-block-view.sh fnos-md-alias.sh fnos-dm-sync.sh fnos-db-selfheal.sh; do
     install -m 0755 "$ASSETS/scripts/$s" "$ROOT/usr/local/sbin/$s"
 done
+install -m 0755 "$HOOKS_DIR/fnos-appcenter-perm" "$ROOT/usr/local/sbin/fnos-appcenter-perm"
 
 # 构建期先就地打好 wrapper（开机 fixes 服务也会自愈）
 if [ -x "$ROOT/usr/sbin/mdadm" ] && [ ! -e "$ROOT/usr/sbin/mdadm.real" ]; then
@@ -75,7 +76,7 @@ mkdir -p "$ROOT/vol1" "$ROOT/mnt"
 echo "--> [5/7] 安装并启用 fnOS 专属 systemd 服务（通用 Droidspaces 限制由 fnOS.Dockerfile 统一配置）"
 mkdir -p "$ROOT/etc/systemd/system/multi-user.target.wants"
 for unit in fnos-droidspaces-fixes.service fnos-block-view.service fnos-block-sync.service \
-    fnos-db-selfheal.service; do
+    fnos-db-selfheal.service fnos-appcenter-perm.service; do
     install -m 0644 "$ASSETS/systemd/$unit" "$ROOT/etc/systemd/system/$unit"
     ln -sfn "/etc/systemd/system/$unit" "$ROOT/etc/systemd/system/multi-user.target.wants/$unit"
 done
@@ -89,6 +90,10 @@ install -m 0644 "$ASSETS/systemd/trim-init-override.conf" \
 mkdir -p "$ROOT/etc/systemd/system/network_service.service.d"
 install -m 0644 "$ASSETS/systemd/network-service-override.conf" \
     "$ROOT/etc/systemd/system/network_service.service.d/droidspaces-veth.conf"
+
+mkdir -p "$ROOT/etc/systemd/system/docker.service.d"
+install -m 0644 "$ASSETS/systemd/docker-storage-driver.conf" \
+    "$ROOT/etc/systemd/system/docker.service.d/droidspaces-storage-driver.conf"
 
 # PostgreSQL 开机重试：首次开机时 postgresql@15-main 可能与 fnOS 自身的
 # triminit 抢跑而瞬间失败（无任何日志），导致主库 trim 建不出来、

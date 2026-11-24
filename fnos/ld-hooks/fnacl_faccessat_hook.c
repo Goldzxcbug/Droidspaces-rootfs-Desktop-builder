@@ -37,6 +37,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#include <sys/xattr.h>
 #include <time.h>
 #include <stdint.h>
 
@@ -50,6 +51,12 @@ typedef int (*unlinkat_fn)(int, const char *, int);
 typedef int (*renameat2_fn)(int, const char *, int, const char *, unsigned int);
 typedef int (*statx_fn)(int, const char *, int, unsigned int, struct statx *);
 typedef int (*utimensat_fn)(int, const char *, const struct timespec *, int);
+typedef ssize_t (*getxattr_fn)(const char *, const char *, void *, size_t);
+typedef ssize_t (*fgetxattr_fn)(int, const char *, void *, size_t);
+typedef int (*setxattr_fn)(const char *, const char *, const void *, size_t, int);
+typedef int (*fsetxattr_fn)(int, const char *, const void *, size_t, int);
+typedef int (*removexattr_fn)(const char *, const char *);
+typedef int (*fremovexattr_fn)(int, const char *);
 
 static int logging_enabled(void)
 {
@@ -315,6 +322,133 @@ int utimensat(int dfd, const char *pathname, const struct timespec times[2],
 	dbg("utimensat", dfd, real_path, ret, saved);
 	errno = saved;
 	return ret;
+}
+
+/* ---------------- xattr: system.trim_* -> user.trim_* ---------------- */
+
+/*
+ * 非飞牛内核不支持 system.trim_acl / system.trim_flags 私有 xattr 命名空间，
+ * 直接调用会返回 EOPNOTSUPP(95)，导致社区 App data-share 授权与目录授权失败。
+ * 在用户态将其透明重定向到 ext4/btrfs 原生支持的 user.trim_* 命名空间。
+ */
+static const char *map_trim_xattr_name(const char *name)
+{
+	static __thread char buf[256];
+	static const char sys_prefix[] = "system.trim_";
+	static const char usr_prefix[] = "user.trim_";
+	size_t suffix_len;
+
+	if (!name || strncmp(name, sys_prefix, sizeof(sys_prefix) - 1) != 0)
+		return name;
+
+	suffix_len = strlen(name + (sizeof(sys_prefix) - 1));
+	if ((sizeof(usr_prefix) - 1) + suffix_len + 1 > sizeof(buf))
+		return name;
+
+	memcpy(buf, usr_prefix, sizeof(usr_prefix) - 1);
+	memcpy(buf + (sizeof(usr_prefix) - 1),
+	       name + (sizeof(sys_prefix) - 1),
+	       suffix_len + 1);
+	return buf;
+}
+
+ssize_t getxattr(const char *path, const char *name, void *value, size_t size)
+{
+	static getxattr_fn real;
+	const char *mapped;
+
+	if (!real)
+		real = (getxattr_fn)dlsym(RTLD_NEXT, "getxattr");
+	mapped = map_trim_xattr_name(name);
+	return real(path, mapped, value, size);
+}
+
+ssize_t lgetxattr(const char *path, const char *name, void *value, size_t size)
+{
+	static getxattr_fn real;
+	const char *mapped;
+
+	if (!real)
+		real = (getxattr_fn)dlsym(RTLD_NEXT, "lgetxattr");
+	mapped = map_trim_xattr_name(name);
+	return real(path, mapped, value, size);
+}
+
+ssize_t fgetxattr(int fd, const char *name, void *value, size_t size)
+{
+	static fgetxattr_fn real;
+	const char *mapped;
+
+	if (!real)
+		real = (fgetxattr_fn)dlsym(RTLD_NEXT, "fgetxattr");
+	mapped = map_trim_xattr_name(name);
+	return real(fd, mapped, value, size);
+}
+
+int setxattr(const char *path, const char *name, const void *value, size_t size, int flags)
+{
+	static setxattr_fn real;
+	const char *mapped;
+
+	if (!real)
+		real = (setxattr_fn)dlsym(RTLD_NEXT, "setxattr");
+	mapped = map_trim_xattr_name(name);
+	return real(path, mapped, value, size, flags);
+}
+
+int lsetxattr(const char *path, const char *name, const void *value, size_t size, int flags)
+{
+	static setxattr_fn real;
+	const char *mapped;
+
+	if (!real)
+		real = (setxattr_fn)dlsym(RTLD_NEXT, "lsetxattr");
+	mapped = map_trim_xattr_name(name);
+	return real(path, mapped, value, size, flags);
+}
+
+int fsetxattr(int fd, const char *name, const void *value, size_t size, int flags)
+{
+	static fsetxattr_fn real;
+	const char *mapped;
+
+	if (!real)
+		real = (fsetxattr_fn)dlsym(RTLD_NEXT, "fsetxattr");
+	mapped = map_trim_xattr_name(name);
+	return real(fd, mapped, value, size, flags);
+}
+
+int removexattr(const char *path, const char *name)
+{
+	static removexattr_fn real;
+	const char *mapped;
+
+	if (!real)
+		real = (removexattr_fn)dlsym(RTLD_NEXT, "removexattr");
+	mapped = map_trim_xattr_name(name);
+	return real(path, mapped);
+}
+
+int lremovexattr(const char *path, const char *name)
+{
+	static removexattr_fn real;
+	const char *mapped;
+
+	if (!real)
+		real = (removexattr_fn)dlsym(RTLD_NEXT, "lremovexattr");
+	mapped = map_trim_xattr_name(name);
+	return real(path, mapped);
+}
+
+int fremovexattr(int fd, const char *name)
+{
+	static fremovexattr_fn real;
+	const char *mapped;
+
+	if (!real)
+		real = (fremovexattr_fn)dlsym(RTLD_NEXT, "fremovexattr");
+	mapped = map_trim_xattr_name(name);
+	return real(fd, mapped);
 }
 
 

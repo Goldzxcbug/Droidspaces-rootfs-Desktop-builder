@@ -18,6 +18,24 @@ LOOP_END="${FNOS_LOOP_END:-99}"
 
 log() { echo "[fnos-block-view] $*"; }
 
+# 确保块设备节点存在且主次设备号与内核一致（不一致时自动重建自愈）
+ensure_blk_node() {
+    local path="$1" maj="$2" min="$3"
+    if [ -b "$path" ]; then
+        local cur_hex cur_maj cur_min
+        cur_hex="$(stat -c '%t:%T' "$path" 2>/dev/null || true)"
+        if [ -n "$cur_hex" ]; then
+            cur_maj=$((16#${cur_hex%%:*}))
+            cur_min=$((16#${cur_hex##*:}))
+            if [ "$cur_maj" = "$maj" ] && [ "$cur_min" = "$min" ]; then
+                return 0
+            fi
+        fi
+        rm -f "$path" 2>/dev/null || true
+    fi
+    mknod -m 660 "$path" b "$maj" "$min" 2>/dev/null || true
+}
+
 # 同步单个 loopN 的分区 loopNp1..loopNp7 为真实目录 sdX1..sdX7 及 /dev/sdXK
 sync_disk_partitions() {
     local loop_name="$1"
@@ -27,16 +45,14 @@ sync_disk_partitions() {
 
     [ -d "$src_disk" ] && [ -d "$dst_disk" ] || return 0
 
-    # 确保整盘 /dev/sdX 节点存在
+    # 确保整盘 /dev/sdX 节点存在且主次设备号匹配当前 loop
     if [ -r "$src_disk/dev" ]; then
         local dnum maj min
         dnum="$(cat "$src_disk/dev" 2>/dev/null || true)"
         if [ -n "$dnum" ]; then
             maj="${dnum%%:*}"
             min="${dnum##*:}"
-            if [ ! -b "/dev/${sd_name}" ]; then
-                mknod -m 660 "/dev/${sd_name}" b "$maj" "$min" 2>/dev/null || true
-            fi
+            ensure_blk_node "/dev/${sd_name}" "$maj" "$min"
             ln -sfn "$dst_disk" "$DEV_DIR/$dnum"
         fi
     fi
@@ -69,12 +85,8 @@ sync_disk_partitions() {
                 printf 'MAJOR=%s\nMINOR=%s\nDEVNAME=%s\nDEVTYPE=partition\nPARTN=%s\n' \
                     "$pmaj" "$pmin" "$part_name" "$p" > "$dst_part/uevent"
                 ln -sfn "$dst_part" "$DEV_DIR/$pnum"
-                if [ ! -b "/dev/${part_name}" ]; then
-                    mknod -m 660 "/dev/${part_name}" b "$pmaj" "$pmin" 2>/dev/null || true
-                fi
-                if [ ! -b "/dev/${loop_name}p${p}" ]; then
-                    mknod -m 660 "/dev/${loop_name}p${p}" b "$pmaj" "$pmin" 2>/dev/null || true
-                fi
+                ensure_blk_node "/dev/${part_name}" "$pmaj" "$pmin"
+                ensure_blk_node "/dev/${loop_name}p${p}" "$pmaj" "$pmin"
             fi
         fi
 
@@ -126,18 +138,47 @@ rm -rf "$VIEW_ROOT"
 mkdir -p "$BLK_DIR" "$CLS_DIR" "$DEV_DIR" "$FAKE_ROOT"
 : > "$MAP_FILE"
 
-# 辅助：寻找或复用镜像对应的 loop 设备
+# 辅助：寻找或复用镜像对应的 loop 设备（优先复用已被 md/RAID 使用的 loop）
 attach_loop() {
     local img="$1"
-    local existing
-    existing="$(losetup -j "$img" 2>/dev/null | head -n1 | cut -d: -f1 || true)"
-    if [ -n "$existing" ] && [ -b "$existing" ]; then
-        partx -u "$existing" 2>/dev/null || true
-        printf '%s\n' "$(basename "$existing")"
+    local idx dev minor bfile base chosen="" fallback=""
+
+    # 先确保已绑定的 loopN（含重启前残留）在容器 /dev 中存在节点，
+    # 否则 losetup -j 与 [ -b ] 会漏掉它们并重复分配新 loop 导致 md 从属盘失配。
+    for bfile in /sys/devices/virtual/block/loop*/loop/backing_file; do
+        [ -r "$bfile" ] || continue
+        base="$(basename "$(dirname "$(dirname "$bfile")")")"
+        idx="${base#loop}"
+        case "$idx" in
+            ''|*[!0-9]*) continue ;;
+        esac
+        dev="/dev/loop${idx}"
+        if [ ! -b "$dev" ] && [ -r "/sys/devices/virtual/block/${base}/dev" ]; then
+            local dnum
+            dnum="$(cat "/sys/devices/virtual/block/${base}/dev" 2>/dev/null || true)"
+            if [ -n "$dnum" ]; then
+                mknod -m 660 "$dev" b "${dnum%%:*}" "${dnum##*:}" 2>/dev/null || true
+            fi
+        fi
+    done
+
+    while IFS= read -r dev; do
+        [ -n "$dev" ] && [ -b "$dev" ] || continue
+        base="$(basename "$dev")"
+        [ -z "$fallback" ] && fallback="$base"
+        if grep -qE "(^|[^[:alnum:]])${base}(p[0-9]+)?\[" /proc/mdstat 2>/dev/null; then
+            chosen="$base"
+            break
+        fi
+    done < <(losetup -j "$img" 2>/dev/null | cut -d: -f1)
+
+    if [ -n "${chosen:-$fallback}" ]; then
+        base="${chosen:-$fallback}"
+        partx -u "/dev/${base}" 2>/dev/null || true
+        printf '%s\n' "$base"
         return 0
     fi
 
-    local idx dev minor
     for idx in $(seq "$LOOP_START" "$LOOP_END"); do
         dev="/dev/loop${idx}"
         minor=$((idx * 8))

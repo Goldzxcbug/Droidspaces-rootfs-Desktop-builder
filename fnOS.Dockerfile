@@ -318,26 +318,18 @@ fi
 echo "Post-extraction fixes applied on $(date)" > /etc/droidspaces
 EOF_RUN
 
-# GPU / VA-API 适配：
-# - fnOS 当前底层为 Debian 12 (bookworm)，不兼容仅支持 Debian 13 的 install-mesa；
-# - 但无桌面 NAS 的视频硬解/硬编（droidspaces-media-decode VA-API）本身不依赖定制 Mesa，
-#   只需保留 enable_gpu_mode=1 透传 /dev/dri/renderD128 与 /dev/video32/33，并配置 LIBVA_DRIVER_NAME=msm_drm。
-# - 若未来 fnOS 升级到 Debian 13，则自动调用 install-mesa --1。
+# GPU / Mesa KGSL / VA-API 硬件编解码适配：
+# 开启 ENABLE_mesa_ARG 时，通过 install-mesa --1 一并安装对应 Debian 12/13 的 Mesa KGSL 驱动
+# 与 droidspaces-media-decode VA-API 硬件编解码驱动（msm_drm_drv_video.so）。
 RUN if [ "$ENABLE_mesa_ARG" = "true" ]; then \
-      . /etc/os-release && \
-      printf '%s\n' 'LIBVA_DRIVER_NAME=msm_drm' >> /etc/environment && \
-      if [ "${ID:-}" = "debian" ] && [ "${VERSION_ID:-}" = "13" ]; then \
-        echo "--> [开启] 检测到 Debian 13，安装 Mesa KGSL 驱动..." && \
-        printf '%s\n' \
-          'MESA_LOADER_DRIVER_OVERRIDE=kgsl' \
-          'TU_DEBUG=noconform' \
-          >> /etc/environment && \
-        /usr/local/sbin/install-mesa --1; \
-      else \
-        echo "--> [提示] 当前 fnOS 底层为 ${PRETTY_NAME:-Debian 12}，跳过 Debian 13 专属 install-mesa；已保留 GPU 透传与 VA-API 环境（启动后可运行 droidspaces-video.sh 安装 msm_drm_drv_video.so）"; \
-      fi; \
+      echo "--> [开启] 安装 Mesa KGSL 与 VA-API 硬件编解码驱动..." && \
+      printf '%s\n' \
+        'MESA_LOADER_DRIVER_OVERRIDE=kgsl' \
+        'TU_DEBUG=noconform' \
+        >> /etc/environment && \
+      /usr/local/sbin/install-mesa --1; \
     else \
-      echo "--> [跳过] 未开启 GPU/VA-API 透传配置"; \
+      echo "--> [跳过] 未开启 Mesa 驱动安装"; \
     fi
 
 # 预装 fuse-overlayfs：规避部分 Android 内核 overlayfs 对非 CAP_SYS_ADMIN 容器进程的写拦截，

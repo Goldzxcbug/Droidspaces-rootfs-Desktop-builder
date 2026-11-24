@@ -34,11 +34,14 @@ fi
 # 2. 动态配置 mediasrv：有 Droidspaces VA-API 硬解驱动 + renderD128 时放行 /dev/dri，
 #    否则自动挂载 nodri/nodmaheap/fakecompat 走 CPU 软解兜底
 mkdir -p /etc/systemd/system/mediasrv.service.d
-if [ -c /dev/dri/renderD128 ] && [ -f /usr/lib/aarch64-linux-gnu/dri/msm_drm_drv_video.so ]; then
+if [ -c /dev/dri/renderD128 ] && {
+    [ -f /usr/lib/aarch64-linux-gnu/dri/msm_drm_drv_video.so ] ||
+    [ -f /usr/lib/dri/msm_drm_drv_video.so ];
+}; then
     cat > /etc/systemd/system/mediasrv.service.d/droidspaces-media.conf <<'MEDIA_HW'
 [Service]
-Environment=LIBVA_DRIVER_NAME=msm_drm
 Environment=MESA_LOADER_DRIVER_OVERRIDE=kgsl
+Environment=TU_DEBUG=noconform
 MEDIA_HW
 else
     cat > /etc/systemd/system/mediasrv.service.d/droidspaces-media.conf <<'MEDIA_SW'

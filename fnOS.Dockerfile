@@ -335,8 +335,11 @@ RUN if [ "$ENABLE_mesa_ARG" = "true" ]; then \
     fi
 
 # 预装 fuse-overlayfs：规避部分 Android 内核 overlayfs 对非 CAP_SYS_ADMIN 容器进程的写拦截，
-# 配合 docker.service.d/droidspaces-storage-driver.conf 实现 Docker 开箱即用
-RUN apt-get update && \
+# 配合 docker.service.d/droidspaces-storage-driver.conf 实现 Docker 开箱即用。
+# 注意：上面的 install-mesa 会连带清理 apt 缓存目录，这里必须先重建 archives/partial，
+# 否则 apt 会以 "Archives directory /var/cache/apt/archives/partial is missing" 失败。
+RUN mkdir -p /var/cache/apt/archives/partial && \
+    apt-get update && \
     apt-get install -y --no-install-recommends fuse-overlayfs && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*

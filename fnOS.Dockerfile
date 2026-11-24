@@ -117,7 +117,8 @@ fi
 
 echo "--> 解压 trimfs.tgz 到 /rootfs..."
 tar --numeric-owner --exclude='./dev/*' --exclude='dev/*' -xzf /work/dl/trimfs.tgz -C /rootfs
-mkdir -p /rootfs/dev
+mkdir -p /rootfs/dev /rootfs/tmp
+chmod 1777 /rootfs/tmp
 test -f /rootfs/etc/os-release
 rm -f /work/dl/trimfs.tgz
 EOF_DL
@@ -323,6 +324,7 @@ EOF_RUN
 # 与 droidspaces-media-decode VA-API 硬件编解码驱动（msm_drm_drv_video.so）。
 RUN if [ "$ENABLE_mesa_ARG" = "true" ]; then \
       echo "--> [开启] 安装 Mesa KGSL 与 VA-API 硬件编解码驱动..." && \
+      mkdir -p -m 1777 /tmp && \
       printf '%s\n' \
         'MESA_LOADER_DRIVER_OVERRIDE=kgsl' \
         'TU_DEBUG=noconform' \

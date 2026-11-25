@@ -1,0 +1,23 @@
+[Unit]
+Description=Droidspaces fnOS DHCP client for NAT/Gateway eth0
+After=network.target NetworkManager.service systemd-networkd.service
+ConditionFileIsExecutable=/usr/sbin/dhclient
+
+[Service]
+Type=simple
+Environment=LC_ALL=C
+ExecCondition=/usr/bin/grep -qxE 'net_mode=(nat|gateway)' /run/droidspaces/container.config
+# NM 既接管了 eth0 又已经拿到全局 IPv4，就不重复申请租约。
+ExecCondition=/bin/sh -c "! nmcli -w 3 -g GENERAL.NM-MANAGED device show eth0 2>/dev/null | grep -qx yes || ! ip -4 -o address show dev eth0 scope global 2>/dev/null | grep -q ."
+# 首次启动时保留已有的 IPv4 配置，服务重启时继续负责自身的租约。
+ExecCondition=/bin/sh -c "test -e /run/fnos-nat-dhcp/started || ! ip -4 -o address show dev eth0 scope global 2>/dev/null | grep -q ."
+RuntimeDirectory=fnos-nat-dhcp
+RuntimeDirectoryPreserve=restart
+StateDirectory=fnos-nat-dhcp
+ExecStartPre=/usr/bin/touch /run/fnos-nat-dhcp/started
+ExecStart=/usr/sbin/dhclient -4 -d -e FNOS_NAT_DHCP=1 -pf /run/fnos-nat-dhcp/eth0.pid -lf /var/lib/fnos-nat-dhcp/eth0.leases eth0
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

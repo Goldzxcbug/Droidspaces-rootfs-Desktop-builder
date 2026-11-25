@@ -1,0 +1,314 @@
+#!/bin/bash
+
+# 开启严格模式：
+# -e: 任何命令执行失败（非零退出码）立即退出脚本
+# -u: 使用未定义变量时报错并退出
+# -o pipefail: 管道命令中只要有一个失败，整个管道命令就算失败
+set -euo pipefail
+
+# 标记文件路径，用于判断固件是否已经处理完成，防止重复执行
+MARKER_FILE="/var/lib/.fw-setup-completed"
+FIRMWARE_DIR="/lib/firmware"
+
+# 定义终端输出颜色的变量，方便提示信息更醒目
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # 清除颜色
+
+# 错误处理函数：打印红色的错误信息并退出脚本
+error_exit() {
+    echo -e "${RED}错误: $1${NC}" >&2
+    # 如果脚本中途报错，为安全起见，删除可能残留的标记文件
+    rm -f "$MARKER_FILE"
+    exit 1
+}
+
+# 权限检查：确保脚本是以 root 权限（sudo）运行的
+if [ "$EUID" -ne 0 ]; then
+    error_exit "此脚本必须以 root 权限运行 (请使用 sudo)"
+fi
+
+echo -e "${GREEN}开始进行固件配置...${NC}"
+echo ""
+
+# ---------------------------------------------------------
+# 第 0 步：检查并安装 zstd 解压工具
+# ---------------------------------------------------------
+echo -e "${YELLOW}第 0 步: 正在检查 zstd 解压工具...${NC}"
+if ! command -v zstd >/dev/null 2>&1; then
+    echo -e "${YELLOW}  未找到 zstd，正在安装...${NC}"
+    echo ""
+    if ! apt-get update; then
+        error_exit "更新软件包列表失败 (为安装 zstd)"
+    fi
+    echo ""
+    if ! apt-get install -y zstd; then
+        error_exit "安装 zstd 软件包失败"
+    fi
+    echo ""
+    echo -e "${GREEN}✓ zstd 安装完成${NC}"
+else
+    echo -e "${GREEN}✓ zstd 已经安装${NC}"
+fi
+echo ""
+
+# ---------------------------------------------------------
+# 第 1 步：安装 linux-firmware 软件包
+# ---------------------------------------------------------
+echo -e "${YELLOW}第 1 步: 正在安装 linux-firmware (Linux 官方固件库)...${NC}"
+echo ""
+if ! apt-get update; then
+    error_exit "更新软件包列表失败"
+fi
+echo ""
+if ! apt-get install -y linux-firmware; then
+    error_exit "安装 linux-firmware 软件包失败"
+fi
+echo ""
+
+# 验证固件目录是否成功创建
+if [ ! -d "$FIRMWARE_DIR" ]; then
+    error_exit "固件目录 $FIRMWARE_DIR 不存在"
+fi
+
+echo -e "${GREEN}✓ linux-firmware 安装完成${NC}"
+echo ""
+
+# ---------------------------------------------------------
+# 第 2 步：寻找并解压所有真实的 .zst 压缩包（排除软链接）
+# ---------------------------------------------------------
+echo -e "${YELLOW}第 2 步: 正在解压 .zst 固件压缩包...${NC}"
+echo ""
+decompressed_count=0
+
+# 创建两个临时文件来存放查找结果（比直接使用进程替换语法兼容性更好）
+TEMP_FILE=$(mktemp)
+TEMP_FILE2=$(mktemp)
+# 使用 trap 确保脚本无论如何结束，都会清理掉这两个临时文件
+trap "rm -f '$TEMP_FILE' '$TEMP_FILE2'" EXIT
+
+# 查找所有后缀为 .zst 的“普通文件”（-type f，排除软链接）
+# -print0 配合 read -d '' 可以完美处理文件名中包含空格的极端情况
+find "$FIRMWARE_DIR" -type f -name "*.zst" -print0 2>/dev/null > "$TEMP_FILE" || true
+
+while IFS= read -r -d '' zst_file; do
+    # 再次确认跳过软链接 (双重保险)
+    if [ -L "$zst_file" ]; then
+        continue
+    fi
+
+    # 获取去掉 .zst 后缀的目标文件名 (例如 wifi.bin.zst -> wifi.bin)
+    target_file="${zst_file%.zst}"
+
+    # 如果解压后的文件已经存在，则跳过
+    if [ -e "$target_file" ]; then
+        echo -e "${YELLOW}  跳过 $zst_file (目标文件已存在)${NC}"
+        continue
+    fi
+
+    # 执行解压 (-d 代表 decompress，-o 指定输出路径)
+    if zstd -d "$zst_file" -o "$target_file" 2>/dev/null; then
+        # 验证解压是否成功
+        if [ -f "$target_file" ]; then
+            # 解压成功后，彻底删除原始的 .zst 压缩包以节省空间
+            rm -f "$zst_file"
+            decompressed_count=$((decompressed_count + 1))
+        else
+            error_exit "解压 $zst_file 失败: 目标文件未创建"
+        fi
+    else
+        error_exit "无法解压 $zst_file"
+    fi
+done < "$TEMP_FILE"
+
+echo ""
+echo -e "${GREEN}✓ 共解压了 $decompressed_count 个压缩文件${NC}"
+echo ""
+
+# ---------------------------------------------------------
+# 第 3 步：处理以 .zst 结尾的软链接 (Symlinks)
+# ---------------------------------------------------------
+# 这部分是最复杂的，因为解压了原始文件后，原来指向 .zst 的软链接全失效了，必须重新定向
+echo -e "${YELLOW}第 3 步: 正在处理 .zst 软链接...${NC}"
+echo ""
+symlink_count=0
+
+# 查找所有指向 .zst 结尾的“软链接”（-type l）
+find "$FIRMWARE_DIR" -type l -name "*.zst" -print0 2>/dev/null > "$TEMP_FILE2" || true
+
+while IFS= read -r -d '' symlink_path; do
+    # 获取该软链接当前指向的目标路径
+    target_path=$(readlink "$symlink_path")
+
+    # 如果是相对路径，计算出它的绝对路径
+    if [[ "$target_path" != /* ]]; then
+        symlink_dir=$(dirname "$symlink_path")
+        target_path=$(realpath -m "$symlink_dir/$target_path")
+    fi
+
+    # 尝试在多个可能的位置寻找真实的文件目标
+    original_target="$target_path"
+    found_target=""
+
+    # 检查原始指向的路径是否存在
+    if [ -e "$target_path" ]; then
+        found_target="$target_path"
+    fi
+
+    # 如果指向 /usr/lib/firmware/，尝试去 /lib/firmware/ 找（处理 Debian 的 usr-merge 问题）
+    if [ -z "$found_target" ] && [[ "$target_path" == /usr/lib/firmware/* ]]; then
+        alt_path="/lib/firmware/${target_path#/usr/lib/firmware/}"
+        if [ -e "$alt_path" ]; then
+            found_target="$alt_path"
+        fi
+    fi
+
+    # 如果还没找到，且目标是个 .zst，检查其对应的“已解压版本”是否存在
+    if [ -z "$found_target" ] && [[ "$target_path" == *.zst ]]; then
+        # 检查原始目录下的已解压版本
+        decompressed_path="${target_path%.zst}"
+        if [ -e "$decompressed_path" ]; then
+            found_target="$decompressed_path"
+        fi
+
+        # 检查 /lib/firmware/ 目录下的已解压版本
+        if [ -z "$found_target" ] && [[ "$target_path" == /usr/lib/firmware/* ]]; then
+            alt_decompressed="/lib/firmware/${decompressed_path#/usr/lib/firmware/}"
+            if [ -e "$alt_decompressed" ]; then
+                found_target="$alt_decompressed"
+            fi
+        fi
+    fi
+
+    # 如果依然没找到，尝试提取相对路径去 /lib/firmware 强行寻找
+    if [ -z "$found_target" ] && [[ "$target_path" != /lib/firmware/* ]]; then
+        if [[ "$target_path" == /* ]]; then
+            rel_path="${target_path#/}"
+            alt_path="/lib/firmware/$rel_path"
+            if [ -e "$alt_path" ]; then
+                found_target="$alt_path"
+            fi
+        fi
+    fi
+
+    # 穷尽办法还是没找到，说明是个死链接，跳过
+    if [ -z "$found_target" ]; then
+        echo -e "${YELLOW}  警告: 软链接 $symlink_path 指向了不存在的目标 $original_target${NC}"
+        continue
+    fi
+
+    target_path="$found_target"
+
+    # 如果目标本身也是一个软链接，循环解析，直到找到最终的真实文件
+    # (内部的查找逻辑和上面的寻找方式一致)
+    while [ -L "$target_path" ]; do
+        link_target=$(readlink "$target_path")
+        if [[ "$link_target" != /* ]]; then
+            link_dir=$(dirname "$target_path")
+            link_target=$(realpath -m "$link_dir/$link_target")
+        fi
+
+        original_link="$link_target"
+        found_link=""
+
+        if [ -e "$link_target" ]; then found_link="$link_target"; fi
+
+        if [ -z "$found_link" ] && [[ "$link_target" == /usr/lib/firmware/* ]]; then
+            alt_path="/lib/firmware/${link_target#/usr/lib/firmware/}"
+            if [ -e "$alt_path" ]; then found_link="$alt_path"; fi
+        fi
+
+        if [ -z "$found_link" ] && [[ "$link_target" == *.zst ]]; then
+            decompressed_path="${link_target%.zst}"
+            if [ -e "$decompressed_path" ]; then
+                found_link="$decompressed_path"
+            fi
+
+            if [ -z "$found_link" ] && [[ "$link_target" == /usr/lib/firmware/* ]]; then
+                alt_decompressed="/lib/firmware/${decompressed_path#/usr/lib/firmware/}"
+                if [ -e "$alt_decompressed" ]; then
+                    found_link="$alt_decompressed"
+                fi
+            fi
+        fi
+
+        if [ -z "$found_link" ]; then
+            # 无法解析则中断，使用当前能拿到的目标
+            break
+        fi
+        target_path="$found_link"
+    done
+
+    # 如果最终顺藤摸瓜找到的目标仍然是个 .zst 文件，则在这里对其进行解压
+    if [[ "$target_path" == *.zst ]] && [ -f "$target_path" ] && [ ! -L "$target_path" ]; then
+        decompressed_target="${target_path%.zst}"
+
+        if [ -e "$decompressed_target" ]; then
+            echo -e "${YELLOW}  目标已被解压: $decompressed_target${NC}"
+            target_path="$decompressed_target"
+        else
+            if zstd -d "$target_path" -o "$decompressed_target" 2>/dev/null; then
+                if [ -f "$decompressed_target" ]; then
+                    rm -f "$target_path"
+                    target_path="$decompressed_target"
+                else
+                    error_exit "解压最终目标 $target_path 失败"
+                fi
+            else
+                error_exit "解压最终目标 $target_path 失败"
+            fi
+        fi
+    fi
+
+    # 计算新的软链接路径（去掉 .zst 后缀）
+    new_symlink_path="${symlink_path%.zst}"
+
+    # 如果新的软链接路径已经被一个真实文件占据了，则跳过
+    if [ -e "$new_symlink_path" ] && [ ! -L "$new_symlink_path" ]; then
+        echo -e "${YELLOW}  跳过 $symlink_path (目标文件已存在)${NC}"
+        continue
+    fi
+
+    # 计算从新软链接位置到真实目标文件的【相对路径】
+    new_symlink_dir=$(dirname "$new_symlink_path")
+    relative_target=$(realpath --relative-to="$new_symlink_dir" "$target_path" 2>/dev/null || echo "$target_path")
+
+    # 删掉旧的带着 .zst 后缀的残废软链接
+    rm -f "$symlink_path"
+
+    # 创建新的软链接（没有 .zst 后缀），指向解压后的真实文件
+    if ln -sf "$relative_target" "$new_symlink_path"; then
+        symlink_count=$((symlink_count + 1))
+    else
+        error_exit "无法创建软链接 $new_symlink_path -> $relative_target"
+    fi
+
+done < "$TEMP_FILE2"
+
+echo ""
+echo -e "${GREEN}✓ 共处理了 $symlink_count 个软链接${NC}"
+echo ""
+
+# ---------------------------------------------------------
+# 第 4 步：创建完成标记文件
+# ---------------------------------------------------------
+echo -e "${YELLOW}第 4 步: 创建完成标记...${NC}"
+echo ""
+if mkdir -p "$(dirname "$MARKER_FILE")" && touch "$MARKER_FILE"; then
+    echo -e "${GREEN}✓ 标记文件已创建: $MARKER_FILE${NC}"
+else
+    error_exit "创建标记文件失败"
+fi
+echo ""
+
+# 完美结束
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}固件配置成功完成！${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "  已解压压缩包: $decompressed_count"
+echo -e "  已处理软链接: $symlink_count"
+echo -e "  完成标记文件: $MARKER_FILE"
+echo ""
+
+exit 0

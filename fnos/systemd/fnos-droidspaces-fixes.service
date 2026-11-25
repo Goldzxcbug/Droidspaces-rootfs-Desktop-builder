@@ -1,0 +1,13 @@
+[Unit]
+Description=Droidspaces fnOS mainline/container compatibility fixes
+DefaultDependencies=no
+After=local-fs.target
+Before=postgresql.service pgbouncer.service trim_main.service filestor_service.service trim_app_center.service fnos-block-view.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/fnos-droidspaces-fixes.sh
+
+[Install]
+WantedBy=multi-user.target

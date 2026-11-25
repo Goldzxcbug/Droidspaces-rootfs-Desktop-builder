@@ -1,0 +1,49 @@
+name: 编译并发布 Droidspaces fnOS RootFS
+
+on:
+  workflow_dispatch:
+    inputs:
+      enable_zh_tz:
+        description: 使用中文并设置上海时区
+        required: true
+        type: boolean
+        default: true
+      enable_mesa:
+        description: 开启高通骁龙 GPU 与 VA-API 硬件编解码支持
+        required: true
+        type: boolean
+        default: true
+      enable_yj:
+        description: 开启 NAT 和硬件识别
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: 构建 fnOS
+    uses: ./.github/workflows/build-rootfs-core.yml
+    with:
+      ui_language: zh
+      build_target: fnOS
+      custom_username: Gold
+      desktop: none
+      extra_desktops: ""
+      desktop_autostart: false
+      display_backend: x11
+      PulseAudio: none
+      enable_zh_tz: ${{ inputs.enable_zh_tz }}
+      enable_mesa: ${{ inputs.enable_mesa }}
+      enable_8gen2_wayland: false
+      nosnap: false
+      enable_systemd257: false
+      enable_srf: false
+      enable_binfmt: false
+      enable_yj: ${{ inputs.enable_yj }}
+      enable_kfgj: false
+      enable_zip: false
+      enable_docker: false
+      wayland_package_repository: Goldzxcbug/droidspaces-package

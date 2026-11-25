@@ -1,0 +1,13 @@
+[Unit]
+Description=Droidspaces fnOS App Center download directory permission watcher
+After=local-fs.target fnos-droidspaces-fixes.service
+Before=trim_app_center.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/fnos-appcenter-perm
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

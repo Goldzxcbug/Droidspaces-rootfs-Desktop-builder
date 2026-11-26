@@ -160,8 +160,13 @@ EOF
                 glib-compile-schemas "$schemas"
                 ;;
             niri)
-                defaults=/etc/niri/config.kdl
-                [ -f "$rootfs$defaults" ] || defaults=/usr/share/doc/niri-anland/default-config.kdl
+                defaults=/usr/local/share/droidspaces/niri/default-config.kdl
+                for template in /etc/niri/config.kdl /usr/share/doc/niri-anland/default-config.kdl; do
+                    if [ -s "$rootfs$template" ]; then
+                        defaults=$template
+                        break
+                    fi
+                done
                 add_compositor_startup niri/config.kdl "$defaults" 'spawn-at-startup "/usr/bin/fcitx5" "-d" "--replace"'
                 autostart_command=
                 ;;

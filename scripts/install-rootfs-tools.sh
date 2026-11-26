@@ -128,6 +128,10 @@ main() {
     if [[ "$BACKEND" == anland-wayland ]]; then
         install_file etc/wireplumber/wireplumber.conf.d/Anland-Audio.conf \
             /etc/wireplumber/wireplumber.conf.d/Anland-Audio.conf 0644
+        if [[ "$DESKTOP_NAME" == niri ]]; then
+            install_file etc/niri/default-config.kdl \
+                /usr/local/share/droidspaces/niri/default-config.kdl 0644
+        fi
     fi
 }
 
